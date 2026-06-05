@@ -1,0 +1,21 @@
+# ── Python ──────────────────────────────────────────────
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ── Env / secrets (NEVER commit) ────────────────────────
+.env
+backend/.env
+*.local
+
+# ── Node / Vite ─────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# ── Editor / OS ─────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
