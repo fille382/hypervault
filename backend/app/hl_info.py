@@ -36,6 +36,14 @@ class HLInfo:
     async def spot_clearinghouse_state(self, address: str) -> Any:
         return await self._post({"type": "spotClearinghouseState", "user": address})
 
+    async def candle_snapshot(self, coin: str, interval: str, start_ms: int, end_ms: int) -> Any:
+        return await self._post(
+            {
+                "type": "candleSnapshot",
+                "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": end_ms},
+            }
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Pure parsers: turn raw Hyperliquid payloads into the shapes the UI consumes. #
@@ -55,21 +63,30 @@ def parse_positions(state: dict) -> list[dict]:
     for ap in (state or {}).get("assetPositions", []):
         p = ap.get("position", {}) or {}
         szi = _f(p.get("szi")) or 0.0
+        size = abs(szi)
         lev = p.get("leverage", {}) or {}
+        position_value = _f(p.get("positionValue"))
+        mark_px = (position_value / size) if (position_value is not None and size) else None
+        # cumFunding.sinceOpen is funding PAID (positive). Flip sign so the UI shows
+        # paid funding as a negative cost (matching Hyperliquid's column).
+        since_open = _f((p.get("cumFunding", {}) or {}).get("sinceOpen"))
+        funding = -since_open if since_open is not None else None
         out.append(
             {
                 "coin": p.get("coin"),
                 "side": "long" if szi >= 0 else "short",
-                "size": abs(szi),
+                "size": size,
                 "signedSize": szi,
                 "entryPx": _f(p.get("entryPx")),
-                "positionValue": _f(p.get("positionValue")),
+                "markPx": mark_px,
+                "positionValue": position_value,
                 "unrealizedPnl": _f(p.get("unrealizedPnl")),
                 "roe": _f(p.get("returnOnEquity")),
                 "leverage": lev.get("value"),
                 "leverageType": lev.get("type"),
                 "liquidationPx": _f(p.get("liquidationPx")),
                 "marginUsed": _f(p.get("marginUsed")),
+                "funding": funding,
                 "maxLeverage": p.get("maxLeverage"),
             }
         )
@@ -134,3 +151,23 @@ def value_spot_balances(balances: list, mids: dict) -> tuple[list[dict], float]:
         out.append({"coin": coin, "total": amount, "usd": usd})
     out.sort(key=lambda r: (r["usd"] or 0.0), reverse=True)
     return out, total
+
+
+def parse_candles(raw: Any) -> list[dict]:
+    """candleSnapshot -> rows for lightweight-charts (time in seconds)."""
+    out: list[dict] = []
+    for c in raw or []:
+        t = c.get("t")
+        if t is None:
+            continue
+        out.append(
+            {
+                "time": int(t) // 1000,
+                "open": _f(c.get("o")),
+                "high": _f(c.get("h")),
+                "low": _f(c.get("l")),
+                "close": _f(c.get("c")),
+                "volume": _f(c.get("v")),
+            }
+        )
+    return out

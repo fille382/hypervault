@@ -39,3 +39,10 @@ export const fmtPx = (n) => {
   const dp = n >= 1000 ? 2 : n >= 1 ? 3 : 5
   return `$${n.toLocaleString('en-US', { maximumFractionDigits: dp })}`
 }
+
+// Bare price (no $ prefix) for table cells, dynamic precision like Hyperliquid.
+export const fmtPrice = (n) => {
+  if (n == null || Number.isNaN(n)) return '—'
+  const dp = n >= 1000 ? 2 : n >= 1 ? 4 : 6
+  return n.toLocaleString('en-US', { maximumFractionDigits: dp })
+}

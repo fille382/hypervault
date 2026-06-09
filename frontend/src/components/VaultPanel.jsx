@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import PositionsTable from './PositionsTable.jsx'
+import ChartPanel from './ChartPanel.jsx'
 import { fmtUsd, fmtSignedUsd, shortAddr } from '../format.js'
 
 export default function VaultPanel({
@@ -11,11 +12,15 @@ export default function VaultPanel({
   onSubmitAddress,
   onMirror,
   onNewTrade,
+  selectedCoin,
+  onSelectCoin,
+  selectedPosition,
 }) {
   const [editing, setEditing] = useState(false)
   const ms = vault?.marginSummary
   const name = vault?.details?.name
   const positions = vault?.positions || []
+  const spotBalances = vault?.spotBalances || []
 
   return (
     <section className="panel">
@@ -82,6 +87,8 @@ export default function VaultPanel({
         </div>
       </div>
 
+      <ChartPanel coin={selectedCoin} position={selectedPosition} />
+
       <div className="tabs">
         <div className="tab active">
           Positions <span className="count">({positions.length})</span>
@@ -98,21 +105,33 @@ export default function VaultPanel({
         </span>
       </div>
 
-      <div className="col-head">
-        <span>Coin</span>
-        <span>Size</span>
-        <span className="r">PNL (ROE %)</span>
-        <span className="r">Action</span>
-      </div>
-
       {vaultError ? (
         <div className="spin">Couldn’t load this address — {vaultError}</div>
       ) : !vault ? (
         <div className="spin">Loading vault…</div>
       ) : positions.length === 0 ? (
-        <div className="empty">No open positions.</div>
+        <div className="empty">
+          No open perp positions for this address.
+          {ms?.spotUsd > 0 && (
+            <div className="empty-sub">
+              Holds {fmtUsd(ms.spotUsd)} in spot
+              {spotBalances.length
+                ? ` (${spotBalances
+                    .slice(0, 3)
+                    .map((b) => b.coin)
+                    .join(', ')})`
+                : ''}
+              .
+            </div>
+          )}
+        </div>
       ) : (
-        <PositionsTable positions={positions} meta={meta} onMirror={onMirror} />
+        <PositionsTable
+          positions={positions}
+          onMirror={onMirror}
+          selectedCoin={selectedCoin}
+          onSelectCoin={onSelectCoin}
+        />
       )}
     </section>
   )

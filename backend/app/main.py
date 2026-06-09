@@ -6,6 +6,7 @@ SAFE mode /api/order returns a simulation instead of sending anything.
 """
 import asyncio
 import logging
+import time
 
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings, update_env_file
 from .hl_info import (
     HLInfo,
+    parse_candles,
     parse_margin_summary,
     parse_meta_ctxs,
     parse_positions,
@@ -88,7 +90,11 @@ async def vault(address: str):
     if not _valid_address(address):
         raise HTTPException(status_code=400, detail="Expected a 0x… 42-character address.")
     try:
-        state = await info.clearinghouse_state(address)
+        state, spot_state, mids = await asyncio.gather(
+            info.clearinghouse_state(address),
+            info.spot_clearinghouse_state(address),
+            info.all_mids(),
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Failed to fetch positions: {exc}") from exc
 
@@ -99,11 +105,16 @@ async def vault(address: str):
     except Exception:  # noqa: BLE001
         details = None
 
+    spot_balances, spot_usd = value_spot_balances((spot_state or {}).get("balances", []), mids)
+    summary = parse_margin_summary(state)
+    summary["spotUsd"] = spot_usd
+
     return {
         "address": address,
         "details": details,
         "positions": parse_positions(state),
-        "marginSummary": parse_margin_summary(state),
+        "marginSummary": summary,
+        "spotBalances": spot_balances,
     }
 
 
@@ -137,6 +148,29 @@ async def account():
         "marginSummary": summary,
         "spotBalances": spot_balances,
     }
+
+
+_INTERVAL_MS = {
+    "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+    "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "8h": 28_800_000,
+    "12h": 43_200_000, "1d": 86_400_000, "3d": 259_200_000, "1w": 604_800_000,
+}
+
+
+@app.get("/api/candles/{coin}")
+async def candles(coin: str, interval: str = "1h", bars: int = 200):
+    interval = interval.lower()
+    step = _INTERVAL_MS.get(interval)
+    if step is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported interval '{interval}'.")
+    bars = max(10, min(int(bars), 1000))
+    end = int(time.time() * 1000)
+    start = end - bars * step
+    try:
+        raw = await info.candle_snapshot(coin, interval, start, end)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Failed to fetch candles: {exc}") from exc
+    return {"coin": coin, "interval": interval, "candles": parse_candles(raw)}
 
 
 # --------------------------------------------------------------------------- #

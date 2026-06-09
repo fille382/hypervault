@@ -24,6 +24,8 @@ export const getHealth = () => fetch('/api/health').then(handle)
 export const getMeta = () => fetch('/api/meta').then(handle)
 export const getVault = (address) => fetch(`/api/vault/${address}`).then(handle)
 export const getAccount = () => fetch('/api/account').then(handle)
+export const getCandles = (coin, interval = '1h', bars = 200) =>
+  fetch(`/api/candles/${encodeURIComponent(coin)}?interval=${interval}&bars=${bars}`).then(handle)
 
 export const setArm = (armed) => post('/api/arm', { armed })
 export const placeOrder = (payload) => post('/api/order', payload)

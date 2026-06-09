@@ -18,6 +18,7 @@ export default function App() {
   const [account, setAccount] = useState(null)
   const [trade, setTrade] = useState(null) // prefill object | null
   const [toast, setToast] = useState(null)
+  const [selectedCoin, setSelectedCoin] = useState(null)
 
   const toastTimer = useRef(null)
   const showToast = useCallback((kind, msg) => {
@@ -66,9 +67,24 @@ export default function App() {
     return () => clearInterval(id)
   }, [refresh])
 
+  // Default the chart to the largest vault position; keep it valid across vault changes.
+  useEffect(() => {
+    const coins = vault?.positions?.map((p) => p.coin) || []
+    if (!coins.length) {
+      if (selectedCoin !== null) setSelectedCoin(null)
+    } else if (!selectedCoin || !coins.includes(selectedCoin)) {
+      setSelectedCoin(coins[0])
+    }
+  }, [vault, selectedCoin])
+
   const onSubmitAddress = (addr) => {
-    const a = (addr || '').trim()
-    if (a) setActiveAddress(a)
+    // Accept a bare 0x address OR a full Hyperliquid vault URL (extract the address).
+    const match = (addr || '').match(/0x[a-fA-F0-9]{40}/)
+    const a = match ? match[0] : (addr || '').trim()
+    if (a) {
+      setActiveAddress(a)
+      setAddressInput(a)
+    }
   }
 
   const onToggleArm = async (next) => {
@@ -101,6 +117,8 @@ export default function App() {
     setTrade({ coin: firstCoin, side: 'long', leverage: 5, marginMode: 'cross', notionalUsd: 100 })
   }
 
+  const selectedPosition = vault?.positions?.find((p) => p.coin === selectedCoin) || null
+
   return (
     <>
       <TopBar health={health} account={account} onToggleArm={onToggleArm} />
@@ -114,6 +132,9 @@ export default function App() {
           onSubmitAddress={onSubmitAddress}
           onMirror={openMirror}
           onNewTrade={openNewTrade}
+          selectedCoin={selectedCoin}
+          onSelectCoin={setSelectedCoin}
+          selectedPosition={selectedPosition}
         />
         <AccountPanel health={health} account={account} notify={showToast} refresh={refresh} />
       </div>

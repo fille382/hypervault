@@ -199,10 +199,10 @@ button {
 /* ── Layout ──────────────────────────────────────────────────────────── */
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 18px;
-  padding: 18px 22px 60px;
-  max-width: 1480px;
+  grid-template-columns: minmax(0, 1fr) 312px;
+  gap: 16px;
+  padding: 18px 20px 60px;
+  max-width: 1520px;
   margin: 0 auto;
 }
 @media (max-width: 1080px) {
@@ -216,6 +216,7 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  min-width: 0; /* let the panel shrink so the table scrolls internally, not the page */
 }
 
 /* ── Vault header ────────────────────────────────────────────────────── */
@@ -322,46 +323,162 @@ button {
   align-items: center;
   gap: 6px;
 }
-.col-head {
+.table-scroll {
+  overflow-x: auto;
+  padding: 2px 14px 14px;
+}
+.table-inner {
+  min-width: 920px;
+}
+
+.col-head,
+.pos-row {
   display: grid;
-  grid-template-columns: 1.5fr 1fr 1.25fr 96px;
-  gap: 12px;
-  padding: 4px 20px 8px;
+  grid-template-columns:
+    minmax(82px, 1.1fr)
+    minmax(100px, 1.35fr)
+    minmax(94px, 1.15fr)
+    minmax(60px, 0.8fr)
+    minmax(60px, 0.8fr)
+    minmax(118px, 1.45fr)
+    minmax(60px, 0.8fr)
+    minmax(98px, 1.15fr)
+    minmax(74px, 0.9fr)
+    68px;
+  gap: 10px;
+  align-items: center;
+}
+
+.col-head {
+  padding: 6px 12px 8px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-faint);
 }
-.col-head .r {
-  text-align: right;
-}
 
 .rows {
-  padding: 4px 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   max-height: calc(100vh - 360px);
   overflow-y: auto;
 }
-.rows.compact {
-  max-height: none;
-}
 
 .pos-row {
-  display: grid;
-  grid-template-columns: 1.5fr 1fr 1.25fr 96px;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--row);
-  border: 1px solid transparent;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--border-soft);
+  transition: background 0.12s ease;
+  font-size: 13px;
+}
+.pos-row:last-child {
+  border-bottom: none;
 }
 .pos-row:hover {
   background: var(--row-hover);
-  border-color: var(--border);
+}
+.pos-row.side-long {
+  box-shadow: inset 2px 0 0 var(--green-line);
+}
+.pos-row.side-short {
+  box-shadow: inset 2px 0 0 var(--red-line);
+}
+
+.cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell .u {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.cell.side-long {
+  color: var(--green);
+}
+.cell.side-short {
+  color: var(--red);
+}
+.pnl-roe .roe {
+  margin-left: 5px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.pos-row {
+  cursor: pointer;
+}
+.pos-row.selected {
+  background: var(--row-hover);
+}
+.pos-row.selected.side-long {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+.pos-row.selected.side-short {
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+/* ── Chart panel ─────────────────────────────────────────────────────── */
+.chart-panel {
+  padding: 8px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.chart-title {
+  font-size: 14px;
+}
+.ct-coin {
+  font-weight: 700;
+}
+.ct-sub {
+  color: var(--text-faint);
+  margin-left: 6px;
+  font-size: 12px;
+}
+.chart-intervals {
+  display: flex;
+  gap: 4px;
+}
+.iv {
+  background: var(--row);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.iv:hover {
+  color: var(--text);
+}
+.iv.active {
+  color: var(--green);
+  border-color: var(--green-line);
+  background: var(--green-dim);
+}
+.chart-wrap {
+  position: relative;
+}
+.chart-body {
+  height: 300px;
+  width: 100%;
+}
+.chart-status {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.chart-status.err {
+  color: var(--red);
 }
 
 .coin-cell {
@@ -372,7 +489,7 @@ button {
 }
 .coin-sym {
   font-weight: 700;
-  font-size: 15px;
+  font-size: 13.5px;
 }
 .coin-cell.side-long .coin-sym {
   color: var(--green);
@@ -427,6 +544,10 @@ button {
 .row-action {
   display: flex;
   justify-content: flex-end;
+}
+.row-action .mirror-btn {
+  padding: 5px 9px;
+  font-size: 11px;
 }
 .mirror-btn {
   border: 1px solid var(--green-line);
@@ -590,6 +711,11 @@ button {
   font-size: 13px;
   padding: 14px 0;
   text-align: center;
+}
+.empty-sub {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
 /* ── Modal ───────────────────────────────────────────────────────────── */
