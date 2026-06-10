@@ -10,6 +10,8 @@ export default function VaultPanel({
   addressInput,
   setAddressInput,
   onSubmitAddress,
+  savedVaults = [],
+  onRemoveVault,
   onMirror,
   onNewTrade,
   selectedCoin,
@@ -17,6 +19,7 @@ export default function VaultPanel({
   selectedPosition,
 }) {
   const [editing, setEditing] = useState(false)
+  const [ddOpen, setDdOpen] = useState(false)
   const ms = vault?.marginSummary
   const name = vault?.details?.name
   const positions = vault?.positions || []
@@ -48,7 +51,61 @@ export default function VaultPanel({
             ) : (
               <>
                 <div className="vault-title-row">
-                  <span className="vault-name">{name || 'Wallet'}</span>
+                  <div className="vault-dd">
+                    <button className="vault-name-btn" onClick={() => setDdOpen((o) => !o)}>
+                      <span className="vault-name">{name || 'Wallet'}</span>
+                      <span className="dd-caret">▾</span>
+                    </button>
+                    {ddOpen && (
+                      <>
+                        <div className="dd-backdrop" onClick={() => setDdOpen(false)} />
+                        <div className="dd-menu">
+                          {savedVaults.length === 0 && (
+                            <div className="dd-empty">No saved vaults yet</div>
+                          )}
+                          {savedVaults.map((s) => (
+                            <div
+                              key={s.address}
+                              className={`dd-item${
+                                s.address.toLowerCase() === vault?.address?.toLowerCase()
+                                  ? ' active'
+                                  : ''
+                              }`}
+                              onClick={() => {
+                                onSubmitAddress(s.address)
+                                setDdOpen(false)
+                              }}
+                            >
+                              <div className="dd-item-main">
+                                <span className="dd-name">{s.name || 'Wallet'}</span>
+                                <span className="dd-addr">{shortAddr(s.address)}</span>
+                              </div>
+                              <button
+                                className="dd-x"
+                                title="Remove"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onRemoveVault(s.address)
+                                }}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                          <div className="dd-sep" />
+                          <button
+                            className="dd-add"
+                            onClick={() => {
+                              setEditing(true)
+                              setDdOpen(false)
+                            }}
+                          >
+                            + Add a vault…
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <span className="following-tag">Following</span>
                 </div>
                 <div className="vault-addr">

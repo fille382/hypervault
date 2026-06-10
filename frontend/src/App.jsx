@@ -7,6 +7,24 @@ import { getHealth, getMeta, getVault, getAccount, setArm } from './api.js'
 
 const DEFAULT_VAULT = '0xd6e56265890b76413d1d527eb9b75e334c0c5b42'
 const POLL_MS = 5000
+const SAVED_KEY = 'hypervault.savedVaults'
+
+function loadSavedVaults() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]')
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+function persistVaults(list) {
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(list))
+  } catch {
+    /* ignore storage errors */
+  }
+}
 
 export default function App() {
   const [health, setHealth] = useState(null)
@@ -19,6 +37,7 @@ export default function App() {
   const [trade, setTrade] = useState(null) // prefill object | null
   const [toast, setToast] = useState(null)
   const [selectedCoin, setSelectedCoin] = useState(null)
+  const [savedVaults, setSavedVaults] = useState(loadSavedVaults)
 
   const toastTimer = useRef(null)
   const showToast = useCallback((kind, msg) => {
@@ -77,6 +96,28 @@ export default function App() {
     }
   }, [vault, selectedCoin])
 
+  // Remember every vault/wallet that successfully loads, for the dropdown.
+  useEffect(() => {
+    const addr = vault?.address
+    if (!addr) return
+    const name = vault.details?.name || null
+    setSavedVaults((prev) => {
+      const idx = prev.findIndex((s) => s.address.toLowerCase() === addr.toLowerCase())
+      if (idx === -1) {
+        const next = [...prev, { address: addr, name }]
+        persistVaults(next)
+        return next
+      }
+      if (name && prev[idx].name !== name) {
+        const next = prev.slice()
+        next[idx] = { ...next[idx], name }
+        persistVaults(next)
+        return next
+      }
+      return prev
+    })
+  }, [vault])
+
   const onSubmitAddress = (addr) => {
     // Accept a bare 0x address OR a full Hyperliquid vault URL (extract the address).
     const match = (addr || '').match(/0x[a-fA-F0-9]{40}/)
@@ -85,6 +126,14 @@ export default function App() {
       setActiveAddress(a)
       setAddressInput(a)
     }
+  }
+
+  const removeVault = (addr) => {
+    setSavedVaults((prev) => {
+      const next = prev.filter((s) => s.address.toLowerCase() !== addr.toLowerCase())
+      persistVaults(next)
+      return next
+    })
   }
 
   const onToggleArm = async (next) => {
@@ -130,6 +179,8 @@ export default function App() {
           addressInput={addressInput}
           setAddressInput={setAddressInput}
           onSubmitAddress={onSubmitAddress}
+          savedVaults={savedVaults}
+          onRemoveVault={removeVault}
           onMirror={openMirror}
           onNewTrade={openNewTrade}
           selectedCoin={selectedCoin}
