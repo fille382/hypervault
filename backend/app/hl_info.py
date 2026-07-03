@@ -24,17 +24,36 @@ class HLInfo:
     async def vault_details(self, vault_address: str) -> Any:
         return await self._post({"type": "vaultDetails", "vaultAddress": vault_address})
 
-    async def clearinghouse_state(self, address: str) -> Any:
-        return await self._post({"type": "clearinghouseState", "user": address})
+    async def clearinghouse_state(self, address: str, dex: Optional[str] = None) -> Any:
+        payload: dict = {"type": "clearinghouseState", "user": address}
+        if dex:
+            payload["dex"] = dex
+        return await self._post(payload)
 
-    async def meta_and_asset_ctxs(self) -> Any:
-        return await self._post({"type": "metaAndAssetCtxs"})
+    async def perp_dexs(self) -> Any:
+        return await self._post({"type": "perpDexs"})
+
+    async def meta_and_asset_ctxs(self, dex: Optional[str] = None) -> Any:
+        payload: dict = {"type": "metaAndAssetCtxs"}
+        if dex:
+            payload["dex"] = dex  # HIP-3 builder dex (e.g. "xyz", "vntl") — main dex otherwise
+        return await self._post(payload)
 
     async def all_mids(self) -> Any:
         return await self._post({"type": "allMids"})
 
     async def spot_clearinghouse_state(self, address: str) -> Any:
         return await self._post({"type": "spotClearinghouseState", "user": address})
+
+    async def user_fills(self, address: str) -> Any:
+        # aggregateByTime merges partial fills of one order into a single row,
+        # matching what Hyperliquid's own trade-history UI shows.
+        return await self._post({"type": "userFills", "user": address, "aggregateByTime": True})
+
+    async def l2_book(self, coin: str) -> Any:
+        # REST snapshot of the order book — used only as a cold-start fallback
+        # while the websocket subscription is still warming up.
+        return await self._post({"type": "l2Book", "coin": coin})
 
     async def candle_snapshot(self, coin: str, interval: str, start_ms: int, end_ms: int) -> Any:
         return await self._post(
@@ -111,8 +130,13 @@ def parse_margin_summary(state: dict) -> dict:
     }
 
 
-def parse_meta_ctxs(meta_ctxs: Any) -> dict:
-    """metaAndAssetCtxs -> { coin: {maxLeverage, szDecimals, markPx, prevDayPx, funding} }."""
+def parse_meta_ctxs(meta_ctxs: Any, dex: str = "") -> dict:
+    """metaAndAssetCtxs -> { coin: {maxLeverage, szDecimals, markPx, prevDayPx, funding, dex} }.
+
+    `dex` is "" for the main perp dex, or the HIP-3 builder dex name (e.g. "xyz").
+    Builder-dex universe names already come prefixed ("xyz:GOLD"), so merging
+    several dexes into one dict is collision-free.
+    """
     result: dict[str, dict] = {}
     if not isinstance(meta_ctxs, list) or len(meta_ctxs) < 2:
         return result
@@ -127,6 +151,7 @@ def parse_meta_ctxs(meta_ctxs: Any) -> dict:
             "markPx": _f((ctx or {}).get("markPx")),
             "prevDayPx": _f((ctx or {}).get("prevDayPx")),
             "funding": _f((ctx or {}).get("funding")),
+            "dex": dex,
         }
     return result
 
@@ -153,21 +178,46 @@ def value_spot_balances(balances: list, mids: dict) -> tuple[list[dict], float]:
     return out, total
 
 
-def parse_candles(raw: Any) -> list[dict]:
-    """candleSnapshot -> rows for lightweight-charts (time in seconds)."""
+def parse_fills(raw: Any) -> list[dict]:
+    """userFills -> rows for the activity feed (newest first as delivered)."""
     out: list[dict] = []
+    for f in raw or []:
+        out.append(
+            {
+                "time": f.get("time"),
+                "coin": f.get("coin"),
+                "side": "buy" if f.get("side") == "B" else "sell",
+                "dir": f.get("dir"),  # e.g. "Open Long", "Close Short", "Long > Short"
+                "px": _f(f.get("px")),
+                "sz": _f(f.get("sz")),
+                "closedPnl": _f(f.get("closedPnl")),
+                "fee": _f(f.get("fee")),
+                "hash": f.get("hash"),
+                "tid": f.get("tid"),  # unique trade id — used to dedupe/persist
+            }
+        )
+    return out
+
+
+def parse_candles(raw: Any) -> list[dict]:
+    """candleSnapshot -> rows for lightweight-charts (time in seconds).
+
+    Deduped by time (last bar wins) and sorted ascending: lightweight-charts
+    asserts strictly increasing, unique timestamps, and Hyperliquid occasionally
+    returns two bars sharing one timestamp (e.g. a repeated boundary bar).
+    """
+    by_time: dict[int, dict] = {}
     for c in raw or []:
         t = c.get("t")
         if t is None:
             continue
-        out.append(
-            {
-                "time": int(t) // 1000,
-                "open": _f(c.get("o")),
-                "high": _f(c.get("h")),
-                "low": _f(c.get("l")),
-                "close": _f(c.get("c")),
-                "volume": _f(c.get("v")),
-            }
-        )
-    return out
+        sec = int(t) // 1000
+        by_time[sec] = {
+            "time": sec,
+            "open": _f(c.get("o")),
+            "high": _f(c.get("h")),
+            "low": _f(c.get("l")),
+            "close": _f(c.get("c")),
+            "volume": _f(c.get("v")),
+        }
+    return [by_time[k] for k in sorted(by_time)]

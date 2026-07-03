@@ -24,13 +24,36 @@ export const getHealth = () => fetch('/api/health').then(handle)
 export const getMeta = () => fetch('/api/meta').then(handle)
 export const getVault = (address) => fetch(`/api/vault/${address}`).then(handle)
 export const getAccount = () => fetch('/api/account').then(handle)
-export const getCandles = (coin, interval = '1h', bars = 200) =>
-  fetch(`/api/candles/${encodeURIComponent(coin)}?interval=${interval}&bars=${bars}`).then(handle)
+// Your persisted trade history (keyed by the connected address). `before` (ms) pages older.
+export const getMyTrades = (limit = 80, before = 0) =>
+  fetch(`/api/account/trades?limit=${limit}${before ? `&before=${before}` : ''}`).then(handle)
+export const getPeers = (addresses) =>
+  fetch(`/api/peers?addresses=${addresses.map(encodeURIComponent).join(',')}`).then(handle)
+export const getFills = (addresses, hours = 24, limit = 60) =>
+  fetch(
+    `/api/fills?addresses=${addresses.map(encodeURIComponent).join(',')}&hours=${hours}&limit=${limit}`,
+  ).then(handle)
+// Live order book (websocket-fed on the backend — cheap to poll fast).
+export const getBook = (coin, levels = 12) =>
+  fetch(`/api/book/${encodeURIComponent(coin)}?levels=${levels}`).then(handle)
+export const getMcap = () => fetch('/api/mcap').then(handle)
+export const getMcapHistory = (days = '365') => fetch(`/api/mcap/history?days=${days}`).then(handle)
+// `before` (ms) loads an older window ending at that time, for lazy-loading history.
+export const getCandles = (coin, interval = '1h', bars = 200, before = 0) =>
+  fetch(
+    `/api/candles/${encodeURIComponent(coin)}?interval=${interval}&bars=${bars}${
+      before ? `&before=${before}` : ''
+    }`,
+  ).then(handle)
 
 export const setArm = (armed) => post('/api/arm', { armed })
 export const placeOrder = (payload) => post('/api/order', payload)
 export const setLeverage = (payload) => post('/api/leverage', payload)
 export const closePosition = (coin) => post('/api/close', { coin })
+// Partial close: `size` is in coin units (e.g. half the position size).
+export const reducePosition = (coin, size) => post('/api/close', { coin, size })
+// Auto-close: reduce-only take-profit / stop-loss trigger orders.
+export const setTpsl = (payload) => post('/api/tpsl', payload)
 
 export const setCredentials = (payload) => post('/api/credentials', payload)
 export const clearCredentials = () => post('/api/credentials/clear', {})

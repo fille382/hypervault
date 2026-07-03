@@ -21,6 +21,17 @@ class LeverageRequest(BaseModel):
 
 class CloseRequest(BaseModel):
     coin: str
+    size: Optional[float] = Field(
+        default=None, gt=0, description="Coin units to close (partial); full position if omitted."
+    )
+
+
+class TpslRequest(BaseModel):
+    coin: str
+    isLong: bool  # the position's direction — the close order is the opposite side
+    size: float = Field(gt=0, description="Coin units the trigger order closes (usually full size).")
+    takeProfitPx: Optional[float] = Field(default=None, gt=0)
+    stopLossPx: Optional[float] = Field(default=None, gt=0)
 
 
 class ArmRequest(BaseModel):

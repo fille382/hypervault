@@ -1,4 +1,5 @@
-import { fmtNum, fmtSignedUsd, fmtPct, fmtUsd, fmtPrice } from '../format.js'
+import { fmtNum, fmtSignedUsd, fmtPct, fmtUsd, fmtPrice, coinLabel } from '../format.js'
+import CoinIcon from './CoinIcon.jsx'
 
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '')
 
@@ -31,11 +32,17 @@ export default function PositionsTable({ positions, onMirror, selectedCoin, onSe
                 onClick={() => onSelectCoin?.(p.coin)}
               >
                 <div className={`coin-cell side-${p.side}`}>
-                  <span className="coin-sym">{p.coin}</span>
+                  <CoinIcon coin={p.coin} size={20} />
+                  <span className="side-arrow" title={p.side}>
+                    {p.side === 'long' ? '▲' : '▼'}
+                  </span>
+                  <span className="coin-sym" title={p.coin}>
+                    {coinLabel(p.coin)}
+                  </span>
                   {p.leverage != null && <span className="lev-badge">{p.leverage}x</span>}
                 </div>
                 <div className={`cell num side-${p.side}`}>
-                  {fmtNum(p.size)} <span className="u">{p.coin}</span>
+                  {fmtNum(p.size)} <span className="u">{coinLabel(p.coin)}</span>
                 </div>
                 <div className="cell num">
                   {p.positionValue != null ? `${fmtNum(p.positionValue, 2)} USDC` : '—'}

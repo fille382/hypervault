@@ -9,6 +9,12 @@ __pycache__/
 backend/.env
 *.local
 
+# ── Local data cache (candles SQLite + WAL) ─────────────
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+
 # ── Node / Vite ─────────────────────────────────────────
 node_modules/
 frontend/node_modules/

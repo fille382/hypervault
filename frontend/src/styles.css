@@ -124,6 +124,21 @@ button {
   color: var(--amber);
   background: rgba(255, 206, 92, 0.1);
 }
+.offline-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--red-line);
+  color: var(--red);
+  background: var(--red-dim);
+  animation: offline-pulse 1.4s ease-in-out infinite;
+}
+@keyframes offline-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
 
 .topbar-spacer {
   flex: 1;
@@ -133,6 +148,56 @@ button {
   text-align: right;
   line-height: 1.15;
 }
+/* Total crypto market cap chip (clickable -> fullscreen chart) */
+.mcap-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  line-height: 1.15;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 4px 12px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+.mcap-spark {
+  display: block;
+  flex-shrink: 0;
+}
+.mcap-chip:hover {
+  border-color: var(--green-line);
+}
+.mcap-chip .label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+}
+.mcap-chip .val {
+  font-weight: 600;
+  font-size: 13px;
+}
+.mcap-chip .val .pos,
+.mcap-chip .val .neg {
+  font-size: 12px;
+}
+
+/* Fullscreen market-cap chart */
+.mcap-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  background: var(--bg);
+  padding: 14px 18px 18px;
+  display: flex;
+  flex-direction: column;
+}
+.mcap-body {
+  flex: 1;
+  min-height: 0;
+}
 .equity-chip .label {
   font-size: 10px;
   text-transform: uppercase;
@@ -141,6 +206,35 @@ button {
 }
 .equity-chip .val {
   font-weight: 600;
+}
+/* The balance chip doubles as the account-popover trigger. */
+.chip-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.chip-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.acct-dd {
+  position: relative;
+}
+.acct-pop {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 31;
+  width: 380px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+.acct-pop .panel.card {
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
 }
 
 /* ── ARM switch ──────────────────────────────────────────────────────── */
@@ -210,6 +304,14 @@ button {
     grid-template-columns: 1fr;
   }
 }
+/* Book-focus mode (rest the mouse on the order book): the right sidebar
+   yields its space to the book until the mouse moves away. */
+.layout.book-focus {
+  grid-template-columns: minmax(0, 1fr);
+}
+.layout.book-focus .rail {
+  display: none;
+}
 
 .panel {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
@@ -219,18 +321,18 @@ button {
   min-width: 0; /* let the panel shrink so the table scrolls internally, not the page */
 }
 
-/* ── Vault header ────────────────────────────────────────────────────── */
+/* ── Vault header — one compact row; the tables below carry the detail ── */
 .vault-head {
-  padding: 18px 20px 0;
+  padding: 12px 20px 10px;
 }
 .vault-title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
   flex-wrap: wrap;
 }
 .vault-name {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -352,17 +454,15 @@ button {
   background: var(--green-dim);
   padding: 3px 8px;
   border-radius: 6px;
-  margin-top: 3px;
 }
 .vault-addr {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 12px;
   color: var(--text-dim);
-  margin-top: 4px;
 }
 .addr-input {
-  width: 100%;
-  margin-top: 4px;
+  flex: 1;
+  min-width: 260px;
   background: var(--row);
   border: 1px solid var(--border);
   color: var(--text);
@@ -376,22 +476,26 @@ button {
   border-color: var(--green-line);
 }
 
-.stat-row {
+/* Inline vault stats — right-aligned in the title row, full values on hover. */
+.vault-stats-inline {
   display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-left: auto;
   flex-wrap: wrap;
-  gap: 26px;
-  padding: 16px 0 14px;
-}
-.stat .label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: 12px;
   color: var(--text-faint);
 }
-.stat .val {
-  font-size: 16px;
+.vault-stats-inline b {
   font-weight: 650;
-  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text);
+}
+.vault-stats-inline b.pos {
+  color: var(--green);
+}
+.vault-stats-inline b.neg {
+  color: var(--red);
 }
 
 /* ── Tabs ────────────────────────────────────────────────────────────── */
@@ -433,6 +537,26 @@ button {
   align-items: center;
   gap: 6px;
 }
+/* Slim dark scrollbars app-wide (instead of Windows' chunky white ones) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 .table-scroll {
   overflow-x: auto;
   padding: 2px 14px 14px;
@@ -542,14 +666,64 @@ button {
 }
 .chart-title {
   font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 .ct-coin {
   font-weight: 700;
 }
 .ct-sub {
   color: var(--text-faint);
-  margin-left: 6px;
   font-size: 12px;
+}
+/* Our coin-specific link, in the corner where lightweight-charts' own
+   attribution logo used to sit (that logo is disabled via attributionLogo). */
+.tv-link {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-faint);
+  text-decoration: none;
+  background: rgba(7, 11, 12, 0.55);
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  pointer-events: auto;
+}
+.tv-link:hover {
+  color: var(--green);
+  border-color: var(--border);
+}
+.tv-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+/* Reusable coin icon (Hyperliquid market glyph) used across the app. */
+.coin-icon {
+  border-radius: 50%;
+  flex: none;
+  object-fit: cover;
+  vertical-align: middle;
+  background: var(--row);
+}
+.coin-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--row-hover);
+  color: var(--text-dim);
+  font-weight: 700;
+  font-size: 0.6em;
+  text-transform: uppercase;
+  line-height: 1;
 }
 .chart-intervals {
   display: flex;
@@ -572,12 +746,406 @@ button {
   border-color: var(--green-line);
   background: var(--green-dim);
 }
+/* Other saved vaults' positions on the charted coin */
+.peer-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.peer-strip-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+.peer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--row);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.peer-chip:hover {
+  border-color: var(--green-line);
+  color: var(--text);
+}
+.peer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.peer-name {
+  font-weight: 600;
+  color: var(--text);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.peer-side {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+.peer-side.long {
+  color: var(--green);
+}
+.peer-side.short {
+  color: var(--red);
+}
+.peer-entry {
+  color: var(--text-dim);
+}
+
+/* Marker toggles: which vaults' trades are drawn on the chart */
+.marker-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.marker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--row);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.marker-chip:hover {
+  border-color: var(--green-line);
+}
+.marker-chip.off {
+  opacity: 0.45;
+  color: var(--text-faint);
+}
+.marker-chip.you {
+  border-color: var(--green-line);
+  background: var(--green-dim);
+}
+.marker-chip.you.off {
+  border-color: var(--border);
+  background: var(--row);
+}
+
 .chart-wrap {
   position: relative;
 }
 .chart-body {
-  height: 300px;
+  /* Scale with the window — small screens still get a usable chart, big
+     monitors get a properly tall one instead of a fixed 300px strip. The
+     chart sits at the very top of the panel now, so it can afford to take
+     most of the viewport height. */
+  height: clamp(400px, 60vh, 820px);
   width: 100%;
+}
+
+/* ── Chart + order book row ──────────────────────────────────────────── */
+.chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  border-bottom: 1px solid var(--border);
+}
+/* Book collapsed to a slim reopen strip — the chart takes the width. */
+.chart-row.book-hidden {
+  grid-template-columns: minmax(0, 1fr) 30px;
+}
+/* Book-focus: wide enough to cover both its old spot and the freed sidebar
+   width, so the pointer that triggered the hover is still over the book
+   after the layout shift (otherwise focus would immediately un-hover). */
+.chart-row.book-focus {
+  grid-template-columns: minmax(0, 1fr) 600px;
+}
+.orderbook.focused {
+  border-left-color: var(--green-line);
+}
+.ob-focus-hint {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chart-row .chart-panel {
+  border-bottom: none; /* the row draws the divider so it spans the book too */
+  min-width: 0;
+}
+@media (max-width: 1180px) {
+  .chart-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .orderbook {
+    display: none; /* too cramped next to the chart — the chart wins */
+  }
+}
+
+/* ── Order book ──────────────────────────────────────────────────────── */
+.orderbook {
+  border-left: 1px solid var(--border);
+  padding: 8px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+}
+.orderbook.collapsed {
+  padding: 0;
+}
+.ob-reopen {
+  flex: 1;
+  writing-mode: vertical-rl;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  padding: 10px 0;
+}
+.ob-reopen:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+.ob-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.ob-head-right {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ob-collapse {
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.ob-collapse:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+.ob-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ob-sub {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.ob-cols {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 2px 4px;
+}
+.ob-cols span:nth-child(2),
+.ob-cols span:nth-child(3) {
+  text-align: right;
+}
+.ob-side {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* clip gracefully if the level estimate runs a row long */
+}
+/* Best ask sits nearest the spread row, so clip the far (top) side instead. */
+.ob-side.asks {
+  justify-content: flex-end;
+}
+.ob-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 4px;
+  align-items: center;
+  padding: 1px 2px;
+  line-height: 1.55;
+}
+.ob-row span {
+  position: relative;
+  z-index: 1;
+}
+/* Cumulative depth bar, anchored to the right edge. Width eases to its new
+   value on every poll, so depth changes glide instead of jumping. */
+.ob-bar {
+  position: absolute;
+  top: 0.5px;
+  bottom: 0.5px;
+  right: 0;
+  z-index: 0;
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+.ob-row.ask .ob-bar {
+  background: var(--red-dim);
+}
+.ob-row.bid .ob-bar {
+  background: var(--green-dim);
+}
+.ob-sz,
+.ob-cum {
+  text-align: right;
+  color: var(--text-dim);
+}
+/* One-shot pulse when a level's size changes — green grew, red shrank. */
+.ob-sz {
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-right: -3px;
+}
+@keyframes ob-flash-up {
+  0% {
+    background: rgba(52, 226, 168, 0.3);
+    color: var(--text);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@keyframes ob-flash-down {
+  0% {
+    background: rgba(255, 93, 115, 0.3);
+    color: var(--text);
+  }
+  100% {
+    background: transparent;
+  }
+}
+.ob-sz.flash-up {
+  animation: ob-flash-up 0.9s ease-out;
+}
+.ob-sz.flash-down {
+  animation: ob-flash-down 0.9s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-bar,
+  .ob-mid-px {
+    transition: none;
+  }
+  .ob-sz.flash-up,
+  .ob-sz.flash-down {
+    animation: none;
+  }
+}
+/* A resting wall — outsized size on one level — pops. */
+.ob-row.wall .ob-sz {
+  color: var(--text);
+  font-weight: 700;
+}
+.ob-mid {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  padding: 4px 2px;
+  margin: 3px 0;
+}
+.ob-mid-px {
+  font-size: 13px;
+  font-weight: 600;
+  transition: color 0.35s ease; /* fades between tick-direction tints */
+}
+.ob-spread {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.ob-empty {
+  color: var(--text-faint);
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* Fullscreen chart */
+.chart-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: var(--bg);
+  padding: 14px 18px 18px;
+  border-bottom: none;
+  display: flex;
+  flex-direction: column;
+}
+.chart-panel.fullscreen .chart-wrap {
+  flex: 1;
+  min-height: 0;
+}
+.chart-panel.fullscreen .chart-body {
+  height: 100%;
+}
+
+.tool-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  align-self: center;
+}
+.trend-trash {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  background: var(--panel-2);
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.trend-trash:hover {
+  border-color: var(--red);
+  background: var(--red-dim);
+}
+.draw-hint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 10px;
+  pointer-events: none;
 }
 .chart-status {
   position: absolute;
@@ -590,11 +1158,67 @@ button {
 .chart-status.err {
   color: var(--red);
 }
+.chart-loading-more {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(7, 11, 12, 0.7);
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+/* Measure tool: translucent box (the marking) + a label placed just outside it. */
+.measure-box {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  border: 1px solid;
+}
+.measure-box.up {
+  border-color: var(--green-line);
+  background: var(--green-dim);
+}
+.measure-box.down {
+  border-color: var(--red-line);
+  background: var(--red-dim);
+}
+.measure-label {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  white-space: nowrap;
+}
+.measure-label.up .measure-pct {
+  color: var(--green);
+}
+.measure-label.down .measure-pct {
+  color: var(--red);
+}
+.measure-pct {
+  font-size: 15px;
+  font-weight: 700;
+}
+.measure-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+}
 
 .coin-cell {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   min-width: 0;
 }
 .coin-sym {
@@ -605,6 +1229,17 @@ button {
   color: var(--green);
 }
 .coin-cell.side-short .coin-sym {
+  color: var(--red);
+}
+.side-arrow {
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.coin-cell.side-long .side-arrow {
+  color: var(--green);
+}
+.coin-cell.side-short .side-arrow {
   color: var(--red);
 }
 .lev-badge {
@@ -789,11 +1424,14 @@ button {
   display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 12px;
-  align-items: baseline;
+  align-items: center;
   padding: 4px 0;
   font-size: 13px;
 }
 .spot-row .sb-coin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
 }
 
@@ -807,6 +1445,25 @@ button {
 }
 .my-pos:first-of-type {
   border-top: none;
+}
+.my-pos.clickable {
+  cursor: pointer;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 7px;
+}
+.my-pos.clickable:hover {
+  background: var(--row-hover);
+}
+.my-pos.selected {
+  background: var(--green-dim);
+}
+.my-pos .mp-info {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
 }
 .my-pos .mp-coin {
   font-weight: 600;
@@ -858,6 +1515,9 @@ button {
 .modal-title {
   font-size: 17px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .x-btn {
   background: none;
@@ -930,6 +1590,157 @@ button {
   transform: translateY(-50%);
   color: var(--text-faint);
   font-size: 13px;
+}
+.input-prefix {
+  position: relative;
+}
+.input-prefix .prefix {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.input-prefix .input {
+  padding-left: 24px;
+}
+
+/* Reduce-exposure % presets and auto-close TP/SL presets */
+.pct-row,
+.preset-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.pct-opt,
+.preset-opt {
+  padding: 9px 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--row);
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+.pct-opt.active {
+  color: var(--text);
+  border-color: var(--green-line);
+  background: var(--green-dim);
+}
+.preset-opt.pos.active {
+  color: var(--green);
+  border-color: var(--green-line);
+  background: var(--green-dim);
+}
+.preset-opt.neg.active {
+  color: var(--red);
+  border-color: var(--red-line);
+  background: var(--red-dim);
+}
+.ac-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ac-ref {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+}
+.ac-ref b {
+  color: var(--text);
+  margin-left: 4px;
+}
+
+/* Manage-position menu on each of your positions */
+.mp-actions {
+  position: relative;
+  flex: none;
+}
+.manage-btn {
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: var(--row);
+  padding: 6px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.manage-btn:hover {
+  color: var(--text);
+  border-color: var(--green-line);
+}
+.manage-menu.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+.manage-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 31;
+  width: 230px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 5px;
+}
+.manage-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 9px;
+  cursor: pointer;
+  color: var(--text);
+}
+.manage-item:hover {
+  background: var(--row-hover);
+}
+.manage-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.manage-item .mi-ic {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--row);
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.manage-item.danger .mi-ic {
+  color: var(--red);
+}
+.manage-item .mi-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.manage-item .mi-t {
+  font-size: 13px;
+  font-weight: 600;
+}
+.manage-item .mi-d {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.manage-item.danger:hover {
+  background: var(--red-dim);
 }
 
 .range {
@@ -1059,6 +1870,98 @@ button {
 .toast.bad {
   border-color: var(--red-line);
 }
+.toast.info {
+  border-color: rgba(90, 169, 255, 0.45);
+}
+
+/* ── Activity feed (position changes in followed vaults) ───────────────── */
+.activity-empty {
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.activity-foot {
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 11px;
+  padding: 8px 0 2px;
+}
+.activity-list {
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  /* mouse-wheel scrolling, no visible scrollbar */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.activity-list::-webkit-scrollbar {
+  display: none;
+}
+.activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.activity-row:last-child {
+  border-bottom: none;
+}
+.activity-row.clickable {
+  cursor: pointer;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: 7px;
+}
+.activity-row.clickable:hover {
+  background: var(--row-hover);
+}
+.activity-row.selected {
+  background: var(--green-dim);
+}
+.act-time {
+  color: var(--text-faint);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.act-icon {
+  align-self: center;
+}
+.coin-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.act-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.act-vault {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.act-text {
+  color: var(--text-dim);
+}
+.act-buy {
+  color: var(--green);
+}
+.act-sell {
+  color: var(--red);
+}
+.activity-window {
+  font-size: 11px;
+  color: var(--text-faint);
+}
 
 /* ── Misc ────────────────────────────────────────────────────────────── */
 .spin {
@@ -1073,4 +1976,110 @@ button {
   border: none;
   padding: 0;
   font-size: 12px;
+}
+
+/* ── All-markets browser (builder dexes + main dex) ───────────────────────── */
+.markets {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 10px;
+}
+.markets-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 12px 4px;
+  cursor: pointer;
+}
+.markets-head:hover {
+  color: var(--text);
+}
+.markets-head .count {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.market-search {
+  width: 100%;
+  background: var(--row);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.market-search:focus {
+  outline: none;
+  border-color: var(--green-line);
+}
+.market-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.market-group-head {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 4px;
+  z-index: 1;
+}
+.market-group-head .count {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.market-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.market-row:hover {
+  background: var(--row-hover);
+}
+.market-row.active {
+  background: var(--green-dim);
+}
+.market-row .m-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.market-row .m-px {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.market-row .m-chg {
+  font-size: 12px;
+  min-width: 56px;
+  text-align: right;
+}
+.m-trade {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.market-row:hover .m-trade {
+  border-color: var(--green-line);
+  color: var(--green);
 }

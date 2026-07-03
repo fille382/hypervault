@@ -1,18 +1,37 @@
 import { useMemo, useState } from 'react'
 import { placeOrder } from '../api.js'
-import { fmtNum, fmtPx, fmtUsd } from '../format.js'
+import { fmtNum, fmtPx, fmtUsd, coinLabel, dexLabel } from '../format.js'
+import CoinIcon from './CoinIcon.jsx'
 
 export default function TradeModal({ initial, meta, health, onClose, onResult }) {
-  const coins = useMemo(() => Object.keys(meta).sort(), [meta])
+  // Group coins by dex so builder markets (xyz:GOLD, vntl:SPACEX, …) sit under
+  // their own headings instead of being lost in one giant alphabetical list.
+  const coinGroups = useMemo(() => {
+    const byDex = {}
+    for (const [name, info] of Object.entries(meta)) {
+      const d = info.dex || ''
+      ;(byDex[d] ||= []).push(name)
+    }
+    for (const d in byDex) byDex[d].sort()
+    return Object.entries(byDex).sort(([a], [b]) =>
+      a === '' ? -1 : b === '' ? 1 : a.localeCompare(b),
+    )
+  }, [meta])
   const [coin, setCoin] = useState(initial.coin)
   const [side, setSide] = useState(initial.side)
-  const [marginMode, setMarginMode] = useState(initial.marginMode)
-  const [notional, setNotional] = useState(String(initial.notionalUsd))
   const m = meta[coin] || {}
+  const onlyIsolated = !!m.onlyIsolated
+  const [marginMode, setMarginMode] = useState(
+    onlyIsolated ? 'isolated' : initial.marginMode || 'isolated',
+  )
+  const [notional, setNotional] = useState(String(initial.notionalUsd))
   const maxLev = m.maxLeverage || 20
   const [leverage, setLeverage] = useState(Math.min(initial.leverage || 5, maxLev))
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
+
+  // Markets that can't be cross-margined force isolated mode.
+  const effMode = onlyIsolated ? 'isolated' : marginMode
 
   const armed = !!health?.armed
   const maxNotional = health?.maxOrderNotionalUsd ?? 2000
@@ -29,24 +48,32 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
     setCoin(c)
     const nm = meta[c] || {}
     setLeverage((lev) => Math.min(lev, nm.maxLeverage || 20))
+    if (nm.onlyIsolated) setMarginMode('isolated')
   }
 
   const submit = async () => {
     setSubmitting(true)
     setResult(null)
     try {
-      const r = await placeOrder({ coin, side, notionalUsd: notionalNum, leverage, marginMode })
+      const r = await placeOrder({
+        coin,
+        side,
+        notionalUsd: notionalNum,
+        leverage,
+        marginMode: effMode,
+      })
+      const label = coinLabel(coin)
       if (r.simulated) {
         setResult({
           ok: true,
-          text: `SAFE simulation — would ${side} ${fmtNum(r.would.size)} ${coin} (~${fmtUsd(
+          text: `SAFE simulation — would ${side} ${fmtNum(r.would.size)} ${label} (~${fmtUsd(
             r.would.notionalUsd,
-          )}) at ${fmtPx(r.would.markPx)}, ${leverage}x ${marginMode}. Flip ARM to send it live.`,
+          )}) at ${fmtPx(r.would.markPx)}, ${leverage}x ${effMode}. Flip ARM to send it live.`,
         })
-        onResult('ok', `Simulated ${side} ${coin}`)
+        onResult('ok', `Simulated ${side} ${label}`)
       } else {
-        setResult({ ok: true, text: `LIVE order sent — ${side} ${coin}. ${extractFill(r)}` })
-        onResult('ok', `Live ${side} ${coin} sent`)
+        setResult({ ok: true, text: `LIVE order sent — ${side} ${label}. ${extractFill(r)}` })
+        onResult('ok', `Live ${side} ${label} sent`)
       }
     } catch (e) {
       setResult({ ok: false, text: e.message })
@@ -60,7 +87,7 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <div className="modal-title">Mirror trade</div>
+          <div className="modal-title">{initial.title || 'Mirror trade'}</div>
           <button className="x-btn" onClick={onClose}>
             ×
           </button>
@@ -68,14 +95,20 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
 
         <div className="field">
           <div className="label">
-            <span>Coin</span>
+            <span className="coin-field-label">
+              <CoinIcon coin={coin} size={16} /> Coin
+            </span>
             <span>{markPx ? `mark ${fmtPx(markPx)}` : ''}</span>
           </div>
           <select className="select" value={coin} onChange={(e) => pickCoin(e.target.value)}>
-            {coins.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
+            {coinGroups.map(([dex, names]) => (
+              <optgroup key={dex || 'main'} label={dexLabel(dex)}>
+                {names.map((c) => (
+                  <option key={c} value={c}>
+                    {coinLabel(c)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </div>
@@ -120,17 +153,24 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
           <div className="label">Margin mode</div>
           <div className="mode-toggle">
             <button
-              className={`mode-opt ${marginMode === 'cross' ? 'active' : ''}`}
-              onClick={() => setMarginMode('cross')}
-            >
-              Cross
-            </button>
-            <button
-              className={`mode-opt ${marginMode === 'isolated' ? 'active' : ''}`}
+              className={`mode-opt ${effMode === 'isolated' ? 'active' : ''}`}
               onClick={() => setMarginMode('isolated')}
             >
               Isolated
             </button>
+            <button
+              className={`mode-opt ${effMode === 'cross' ? 'active' : ''}`}
+              onClick={() => setMarginMode('cross')}
+              disabled={onlyIsolated}
+              title={onlyIsolated ? 'This market is isolated-only' : ''}
+            >
+              Cross
+            </button>
+          </div>
+          <div className="note" style={{ marginTop: 4 }}>
+            {onlyIsolated
+              ? `${coinLabel(coin)} is isolated-only — cross margin isn’t available.`
+              : 'Isolated caps your loss at the margin assigned to this position.'}
           </div>
         </div>
 
@@ -155,7 +195,7 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
         <div className="summary">
           <div className="line">
             <span className="k">Est. size</span>
-            <span className="num">{estSize != null ? `${fmtNum(estSize)} ${coin}` : '—'}</span>
+            <span className="num">{estSize != null ? `${fmtNum(estSize)} ${coinLabel(coin)}` : '—'}</span>
           </div>
           <div className="line">
             <span className="k">Est. margin ({leverage}x)</span>
@@ -183,7 +223,7 @@ export default function TradeModal({ initial, meta, health, onClose, onResult })
           {submitting
             ? 'Sending…'
             : armed
-              ? `Place LIVE ${side} — ${fmtUsd(notionalNum, 0)} ${coin}`
+              ? `Place LIVE ${side} — ${fmtUsd(notionalNum, 0)} ${coinLabel(coin)}`
               : `Simulate ${side} (SAFE)`}
         </button>
 
