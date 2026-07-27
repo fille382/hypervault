@@ -52,7 +52,12 @@ def load_settings() -> Settings:
         max_order_notional_usd=float(os.getenv("MAX_ORDER_NOTIONAL_USD") or "2000"),
         default_slippage=float(os.getenv("DEFAULT_SLIPPAGE") or "0.01"),
         cors_origins=_split_csv(
-            os.getenv("CORS_ORIGINS") or "http://localhost:5173,http://127.0.0.1:5173"
+            os.getenv("CORS_ORIGINS")
+            # Vite dev servers plus the GitHub Pages site (which calls this
+            # backend on loopback — see frontend/src/api.js).
+            or "http://localhost:5173,http://127.0.0.1:5173"
+            ",http://localhost:5174,http://127.0.0.1:5174"
+            ",https://fille382.github.io"
         ),
     )
 
