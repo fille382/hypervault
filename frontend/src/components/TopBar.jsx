@@ -85,7 +85,14 @@ export default function TopBar({
       <span className={`net-pill ${network === 'testnet' ? 'testnet' : ''}`}>{network}</span>
       {!online && (
         <span className="offline-pill" title="Can't reach the backend (is it running on :8001?)">
-          ● Backend offline — reconnecting…
+          ● Backend offline — reconnecting…{' '}
+          <a
+            className="start-backend-link"
+            href="hypervault://start"
+            title="Launches the backend on this PC. Needs the one-time hypervault:// registration — run scripts/register-backend-protocol.ps1."
+          >
+            ▶ start backend
+          </a>
         </span>
       )}
 

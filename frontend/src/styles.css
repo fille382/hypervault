@@ -134,6 +134,14 @@ button {
   background: var(--red-dim);
   animation: offline-pulse 1.4s ease-in-out infinite;
 }
+.start-backend-link {
+  color: var(--red);
+  text-decoration: underline;
+  font-weight: 700;
+}
+.start-backend-link:hover {
+  color: #fff;
+}
 @keyframes offline-pulse {
   50% {
     opacity: 0.55;
