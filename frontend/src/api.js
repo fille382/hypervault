@@ -34,10 +34,18 @@ export const getFills = (addresses, hours = 24, limit = 60) =>
     `/api/fills?addresses=${addresses.map(encodeURIComponent).join(',')}&hours=${hours}&limit=${limit}`,
   ).then(handle)
 // Live order book (websocket-fed on the backend — cheap to poll fast).
-export const getBook = (coin, levels = 12) =>
-  fetch(`/api/book/${encodeURIComponent(coin)}?levels=${levels}`).then(handle)
-export const getMcap = () => fetch('/api/mcap').then(handle)
-export const getMcapHistory = (days = '365') => fetch(`/api/mcap/history?days=${days}`).then(handle)
+// `sig`/`mantissa` group levels into coarser price buckets (Hyperliquid's
+// nSigFigs/mantissa); 0 = the coin's native tick.
+export const getBook = (coin, levels = 12, sig = 0, mantissa = 0) =>
+  fetch(
+    `/api/book/${encodeURIComponent(coin)}?levels=${levels}${sig ? `&sig=${sig}` : ''}${
+      mantissa ? `&mantissa=${mantissa}` : ''
+    }`,
+  ).then(handle)
+// Recent public trades for a coin (the tape). `since` (ms) returns only newer
+// trades, so poll with the newest time you've seen as a cursor.
+export const getTrades = (coin, since = 0) =>
+  fetch(`/api/trades/${encodeURIComponent(coin)}?since=${since}`).then(handle)
 // `before` (ms) loads an older window ending at that time, for lazy-loading history.
 export const getCandles = (coin, interval = '1h', bars = 200, before = 0) =>
   fetch(
@@ -46,8 +54,13 @@ export const getCandles = (coin, interval = '1h', bars = 200, before = 0) =>
     }`,
   ).then(handle)
 
+// Spot pairs ("HYPE/USDC" …) with mark prices, for the order ticket's Spot tab.
+export const getSpotMeta = () => fetch('/api/spot/meta').then(handle)
+
 export const setArm = (armed) => post('/api/arm', { armed })
 export const placeOrder = (payload) => post('/api/order', payload)
+// Spot market buy/sell — actually owning the tokens, no leverage.
+export const placeSpotOrder = (payload) => post('/api/spot/order', payload)
 export const setLeverage = (payload) => post('/api/leverage', payload)
 export const closePosition = (coin) => post('/api/close', { coin })
 // Partial close: `size` is in coin units (e.g. half the position size).

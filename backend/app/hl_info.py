@@ -3,20 +3,62 @@
 Used to render the vault dashboard and your own account state. Everything here
 is public data, so the viewer works even before you configure a trading key.
 """
+import time
+from collections import deque
 from typing import Any, Optional
 
 import httpx
+
+# Hyperliquid's REST limit is 1200 "weight" per minute per IP, shared by ALL
+# traffic from this machine — including signed orders. Read polling here spends
+# from a smaller budget so a busy dashboard can never starve the trading path
+# (an order that hits the exhausted IP limit is rejected with HTTP 429).
+# Per the docs: these /info types cost 2, userRole costs 60, the rest cost 20.
+_REQUEST_WEIGHTS = {
+    "l2Book": 2,
+    "allMids": 2,
+    "clearinghouseState": 2,
+    "orderStatus": 2,
+    "spotClearinghouseState": 2,
+    "exchangeStatus": 2,
+}
+_DEFAULT_WEIGHT = 20
+READ_BUDGET_PER_MIN = 900
+
+
+class HLRateLimited(RuntimeError):
+    """Local read budget exhausted — request skipped to protect the trading path."""
 
 
 class HLInfo:
     def __init__(self, base_url: str, timeout: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+        self._spent: deque[tuple[float, int]] = deque()  # (timestamp, weight)
+        self._spent_total = 0
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def _spend(self, weight: int) -> None:
+        """Reserve `weight` from the sliding 1-minute read budget, or refuse.
+
+        Refusing (rather than queueing) keeps the endpoint fast: callers all
+        have a cached/stale fallback, and the budget refills within seconds.
+        """
+        now = time.time()
+        while self._spent and now - self._spent[0][0] > 60:
+            self._spent_total -= self._spent.popleft()[1]
+        if self._spent_total + weight > READ_BUDGET_PER_MIN:
+            raise HLRateLimited(
+                f"Read budget exhausted ({self._spent_total}/{READ_BUDGET_PER_MIN} "
+                "weight in the last minute) — serving cached data."
+            )
+        self._spent.append((now, weight))
+        self._spent_total += weight
+
     async def _post(self, payload: dict) -> Any:
+        self._spend(_REQUEST_WEIGHTS.get(payload.get("type"), _DEFAULT_WEIGHT))
         resp = await self._client.post("/info", json=payload)
         resp.raise_for_status()
         return resp.json()
@@ -45,15 +87,26 @@ class HLInfo:
     async def spot_clearinghouse_state(self, address: str) -> Any:
         return await self._post({"type": "spotClearinghouseState", "user": address})
 
+    async def spot_meta_and_asset_ctxs(self) -> Any:
+        return await self._post({"type": "spotMetaAndAssetCtxs"})
+
     async def user_fills(self, address: str) -> Any:
         # aggregateByTime merges partial fills of one order into a single row,
         # matching what Hyperliquid's own trade-history UI shows.
         return await self._post({"type": "userFills", "user": address, "aggregateByTime": True})
 
-    async def l2_book(self, coin: str) -> Any:
+    async def l2_book(
+        self, coin: str, sig: Optional[int] = None, mantissa: Optional[int] = None
+    ) -> Any:
         # REST snapshot of the order book — used only as a cold-start fallback
-        # while the websocket subscription is still warming up.
-        return await self._post({"type": "l2Book", "coin": coin})
+        # while the websocket subscription is still warming up. nSigFigs and
+        # mantissa mirror the ws subscription's price-grouping options.
+        payload: dict = {"type": "l2Book", "coin": coin}
+        if sig:
+            payload["nSigFigs"] = sig
+            if mantissa and sig == 5:
+                payload["mantissa"] = mantissa
+        return await self._post(payload)
 
     async def candle_snapshot(self, coin: str, interval: str, start_ms: int, end_ms: int) -> Any:
         return await self._post(
@@ -131,7 +184,7 @@ def parse_margin_summary(state: dict) -> dict:
 
 
 def parse_meta_ctxs(meta_ctxs: Any, dex: str = "") -> dict:
-    """metaAndAssetCtxs -> { coin: {maxLeverage, szDecimals, markPx, prevDayPx, funding, dex} }.
+    """metaAndAssetCtxs -> { coin: {maxLeverage, szDecimals, markPx, prevDayPx, funding, oiUsd, dayNtlVlm, dex} }.
 
     `dex` is "" for the main perp dex, or the HIP-3 builder dex name (e.g. "xyz").
     Builder-dex universe names already come prefixed ("xyz:GOLD"), so merging
@@ -144,14 +197,54 @@ def parse_meta_ctxs(meta_ctxs: Any, dex: str = "") -> dict:
     ctxs = meta_ctxs[1] or []
     for i, asset in enumerate(universe):
         ctx = ctxs[i] if i < len(ctxs) else {}
+        mark_px = _f((ctx or {}).get("markPx"))
+        oi = _f((ctx or {}).get("openInterest"))
         result[asset.get("name")] = {
             "maxLeverage": asset.get("maxLeverage"),
             "szDecimals": asset.get("szDecimals"),
             "onlyIsolated": asset.get("onlyIsolated", False),
-            "markPx": _f((ctx or {}).get("markPx")),
+            "markPx": mark_px,
             "prevDayPx": _f((ctx or {}).get("prevDayPx")),
             "funding": _f((ctx or {}).get("funding")),
+            # Open-interest notional: HL has no market-cap field, and this is the
+            # closest on-exchange proxy for ranking markets by size.
+            "oiUsd": oi * mark_px if oi is not None and mark_px is not None else None,
+            "dayNtlVlm": _f((ctx or {}).get("dayNtlVlm")),
             "dex": dex,
+        }
+    return result
+
+
+def parse_spot_meta_ctxs(raw: Any) -> dict:
+    """spotMetaAndAssetCtxs -> { "BASE/QUOTE": {coin, base, szDecimals, markPx, prevDayPx, dayNtlVlm} }.
+
+    Keys are human pair names ("HYPE/USDC"); `coin` is the on-exchange id the
+    API wants ("PURR/USDC" for canonical pairs, "@107" for the rest). The SDK
+    resolves both, so the display name is safe to trade with directly. On a
+    duplicate display name the first pair wins (mirrors the SDK's mapping).
+    """
+    result: dict[str, dict] = {}
+    if not isinstance(raw, list) or len(raw) < 2:
+        return result
+    meta = raw[0] or {}
+    tokens = meta.get("tokens", []) or []
+    ctx_by_coin = {c.get("coin"): c for c in (raw[1] or []) if c}
+    for pair in meta.get("universe", []) or []:
+        try:
+            base_t, quote_t = (tokens[i] for i in pair.get("tokens"))
+        except (TypeError, ValueError, IndexError):
+            continue
+        display = f'{base_t.get("name")}/{quote_t.get("name")}'
+        if display in result:
+            continue
+        ctx = ctx_by_coin.get(pair.get("name")) or {}
+        result[display] = {
+            "coin": pair.get("name"),
+            "base": base_t.get("name"),
+            "szDecimals": base_t.get("szDecimals"),
+            "markPx": _f(ctx.get("markPx")) or _f(ctx.get("midPx")),
+            "prevDayPx": _f(ctx.get("prevDayPx")),
+            "dayNtlVlm": _f(ctx.get("dayNtlVlm")),
         }
     return result
 
@@ -173,7 +266,16 @@ def value_spot_balances(balances: list, mids: dict) -> tuple[list[dict], float]:
         usd = amount * px if px is not None else None
         if usd is not None:
             total += usd
-        out.append({"coin": coin, "total": amount, "usd": usd})
+        # `hold` is locked in open orders; only the rest is spendable/sellable.
+        hold = _f(b.get("hold")) or 0.0
+        out.append(
+            {
+                "coin": coin,
+                "total": amount,
+                "available": max(0.0, amount - hold),
+                "usd": usd,
+            }
+        )
     out.sort(key=lambda r: (r["usd"] or 0.0), reverse=True)
     return out, total
 

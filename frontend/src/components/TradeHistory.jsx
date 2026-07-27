@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getMyTrades } from '../api.js'
+import { loadNotices, removeNotice, noticeText, NOTICES_EVENT } from '../alerts.js'
 import { fmtNum, fmtPrice, fmtSignedUsd, shortAddr, coinLabel } from '../format.js'
 import CoinIcon from './CoinIcon.jsx'
 
@@ -31,6 +32,14 @@ export default function TradeHistory({ configured, address, selectedCoin, onSele
   const [loadingMore, setLoadingMore] = useState(false)
   const noMoreRef = useRef(false)
   const busyRef = useRef(false)
+  // Fired price-alert notices (from the chart's 🔔 tool) shown inline with
+  // your fills, so the feed reads as one timeline of things that happened.
+  const [notices, setNotices] = useState(loadNotices)
+  useEffect(() => {
+    const sync = () => setNotices(loadNotices())
+    window.addEventListener(NOTICES_EVENT, sync)
+    return () => window.removeEventListener(NOTICES_EVENT, sync)
+  }, [])
 
   // Initial load + poll the newest fills (the server persists any new ones).
   useEffect(() => {
@@ -78,17 +87,28 @@ export default function TradeHistory({ configured, address, selectedCoin, onSele
     }
   }, [trades])
 
-  if (!configured) return null
+  // One timeline: your fills and fired alert notices, newest first.
+  const rows = useMemo(
+    () =>
+      [
+        ...trades.map((f) => ({ key: `t${f.tid}`, time: f.time, f })),
+        ...notices.map((n) => ({ key: `n${n.id}`, time: n.time, n })),
+      ].sort((a, b) => b.time - a.time),
+    [trades, notices],
+  )
+
+  // Alert notices are worth showing even before trading is connected.
+  if (!configured && notices.length === 0) return null
 
   return (
     <section className="panel card">
       <div className="card-head">
         <h3>Trade history</h3>
         <span className="activity-window" title={address}>
-          {shortAddr(address)} · {total} saved
+          {configured ? `${shortAddr(address)} · ${total} saved` : 'price alerts'}
         </span>
       </div>
-      {trades.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="activity-empty">
           No saved trades yet. Your fills are recorded here as you trade — and kept across sessions.
         </div>
@@ -100,31 +120,58 @@ export default function TradeHistory({ configured, address, selectedCoin, onSele
             if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) loadOlder()
           }}
         >
-          {trades.map((f) => (
-            <div
-              key={f.tid}
-              className={`activity-row clickable${f.coin === selectedCoin ? ' selected' : ''}`}
-              title={`Show ${f.coin} on chart`}
-              onClick={() => onSelectCoin?.(f.coin)}
-            >
-              <span className="act-time num" title={new Date(f.time).toLocaleString()}>
-                {fmtAge(f.time)}
-              </span>
-              <CoinIcon coin={f.coin} size={20} className="act-icon" />
-              <div className="act-body">
-                <span className={`act-text ${f.side === 'buy' ? 'act-buy' : 'act-sell'}`}>
-                  {f.dir || (f.side === 'buy' ? 'Buy' : 'Sell')} {fmtNum(f.sz)} {coinLabel(f.coin)} @{' '}
-                  {fmtPrice(f.px)}
-                  {f.closedPnl != null && Math.abs(f.closedPnl) >= 0.01 && (
-                    <span className={f.closedPnl >= 0 ? 'pos' : 'neg'}>
-                      {' '}
-                      ({fmtSignedUsd(f.closedPnl)})
-                    </span>
-                  )}
+          {rows.map(({ key, f, n }) =>
+            n ? (
+              <div
+                key={key}
+                className={`activity-row clickable${n.coin === selectedCoin ? ' selected' : ''}`}
+                title={`Show ${n.coin} on chart`}
+                onClick={() => onSelectCoin?.(n.coin)}
+              >
+                <span className="act-time num" title={new Date(n.time).toLocaleString()}>
+                  {fmtAge(n.time)}
                 </span>
+                <CoinIcon coin={n.coin} size={20} className="act-icon" />
+                <div className="act-body">
+                  <span className="act-text act-alert">🔔 {noticeText(n)}</span>
+                </div>
+                <button
+                  className="act-dismiss"
+                  title="Dismiss this alert notice"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    removeNotice(n.id)
+                  }}
+                >
+                  ✕
+                </button>
               </div>
-            </div>
-          ))}
+            ) : (
+              <div
+                key={key}
+                className={`activity-row clickable${f.coin === selectedCoin ? ' selected' : ''}`}
+                title={`Show ${f.coin} on chart`}
+                onClick={() => onSelectCoin?.(f.coin)}
+              >
+                <span className="act-time num" title={new Date(f.time).toLocaleString()}>
+                  {fmtAge(f.time)}
+                </span>
+                <CoinIcon coin={f.coin} size={20} className="act-icon" />
+                <div className="act-body">
+                  <span className={`act-text ${f.side === 'buy' ? 'act-buy' : 'act-sell'}`}>
+                    {f.dir || (f.side === 'buy' ? 'Buy' : 'Sell')} {fmtNum(f.sz)}{' '}
+                    {coinLabel(f.coin)} @ {fmtPrice(f.px)}
+                    {f.closedPnl != null && Math.abs(f.closedPnl) >= 0.01 && (
+                      <span className={f.closedPnl >= 0 ? 'pos' : 'neg'}>
+                        {' '}
+                        ({fmtSignedUsd(f.closedPnl)})
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            ),
+          )}
           {loadingMore && <div className="activity-foot">loading…</div>}
           {noMoreRef.current && !loadingMore && (
             <div className="activity-foot">— end of saved history —</div>

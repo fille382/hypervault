@@ -1,33 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createChart, AreaSeries, LineSeries } from 'lightweight-charts'
-import { getMcapHistory } from '../api.js'
+import { getCandles } from '../api.js'
 import { loadTrendStore, saveTrendStore, rayPoints, TREND_OPTS } from '../trendlines.js'
 
-const MCAP_KEY = '__MCAP__' // trendline-store key for this chart
+const BTC_KEY = '__BTC__' // trendline-store key for this chart (daily macro view)
 const RANGES = [
-  { label: '90D', value: '90' },
-  { label: '1Y', value: '365' },
-  { label: 'Max', value: 'max' },
+  { label: '90D', bars: 90 },
+  { label: '1Y', bars: 365 },
+  { label: 'Max', bars: 5000 }, // backend caps at 5000; BTC's full daily history fits
 ]
 
-const fmtCap = (v) => {
+const fmtBtc = (v) => {
   if (v == null || Number.isNaN(v)) return ''
-  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(0)}B`
-  return `$${(v / 1e6).toFixed(0)}M`
+  return `$${v.toLocaleString('en-US', { maximumFractionDigits: v >= 100 ? 0 : 2 })}`
 }
 
-// Fullscreen total-crypto-market-cap chart with the same trendline tools as
-// the coin chart (draw, per-line delete, persistence).
-export default function McapChart({ onClose }) {
+// Fullscreen BTC daily chart, served from the same Hyperliquid candle feed
+// (and local cache) as the coin chart, with the same trendline tools
+// (draw, per-line delete, persistence).
+export default function BtcChart({ onClose }) {
   const bodyRef = useRef(null)
   const chartRef = useRef(null)
   const seriesRef = useRef(null)
   const timesRef = useRef([])
   const trendSeriesRef = useRef([])
   const draftRef = useRef(null)
-  const [range, setRange] = useState('365')
+  const [range, setRange] = useState(365)
   const [drawMode, setDrawMode] = useState(false)
   const [trendVersion, setTrendVersion] = useState(0)
   const [hasLines, setHasLines] = useState(false)
@@ -57,7 +56,7 @@ export default function McapChart({ onClose }) {
       timeScale: { borderColor: '#1a2a2d', timeVisible: false },
       rightPriceScale: { borderColor: '#1a2a2d' },
       crosshair: { mode: 1 },
-      localization: { priceFormatter: fmtCap },
+      localization: { priceFormatter: fmtBtc },
     })
     const series = chart.addSeries(AreaSeries, {
       lineColor: '#34e2a8',
@@ -77,28 +76,40 @@ export default function McapChart({ onClose }) {
     }
   }, [])
 
-  // Load history for the selected range.
+  // Load daily BTC closes for the selected range. A failed load retries on a
+  // timer — the errors are transient (backend restarting, upstream hiccup) and
+  // this modal has no other refresh path, so one bad fetch would otherwise
+  // leave it dead until the range changes.
   useEffect(() => {
     let cancelled = false
+    let retryTimer = null
     setLoading(true)
     setErr(null)
-    getMcapHistory(range)
-      .then((d) => {
-        if (cancelled || !seriesRef.current) return
-        const points = d.points || []
-        seriesRef.current.setData(points)
-        timesRef.current = points.map((p) => p.time)
-        setDataTick((t) => t + 1)
-        chartRef.current?.timeScale().fitContent()
-      })
-      .catch((e) => {
-        if (!cancelled) setErr(e.message)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () =>
+      getCandles('BTC', '1d', range)
+        .then((d) => {
+          if (cancelled || !seriesRef.current) return
+          setErr(null)
+          const points = (d.candles || [])
+            .filter((c) => c.close != null)
+            .map((c) => ({ time: c.time, value: c.close }))
+          seriesRef.current.setData(points)
+          timesRef.current = points.map((p) => p.time)
+          setDataTick((t) => t + 1)
+          chartRef.current?.timeScale().fitContent()
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setErr(e.message)
+          retryTimer = setTimeout(load, 4000)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    load()
     return () => {
       cancelled = true
+      clearTimeout(retryTimer)
     }
   }, [range])
 
@@ -114,7 +125,7 @@ export default function McapChart({ onClose }) {
       }
     })
     trendSeriesRef.current = []
-    const lines = loadTrendStore()[MCAP_KEY] || []
+    const lines = loadTrendStore()[BTC_KEY] || []
     const step = dataStep()
     for (const ln of lines) {
       const s = chart.addSeries(LineSeries, TREND_OPTS)
@@ -165,7 +176,7 @@ export default function McapChart({ onClose }) {
       trendSeriesRef.current.push({ series: d.series, ln })
       draftRef.current = null
       const store = loadTrendStore()
-      store[MCAP_KEY] = [...(store[MCAP_KEY] || []), ln]
+      store[BTC_KEY] = [...(store[BTC_KEY] || []), ln]
       saveTrendStore(store)
       setHasLines(true)
       setDrawMode(false)
@@ -218,7 +229,7 @@ export default function McapChart({ onClose }) {
     }
     const onMove = (param) => {
       if (!param?.point) return
-      const lines = loadTrendStore()[MCAP_KEY] || []
+      const lines = loadTrendStore()[BTC_KEY] || []
       const ts = chart.timeScale()
       let best = null
       lines.forEach((ln, index) => {
@@ -255,10 +266,10 @@ export default function McapChart({ onClose }) {
 
   const deleteTrendline = (index) => {
     const store = loadTrendStore()
-    const lines = store[MCAP_KEY] || []
+    const lines = store[BTC_KEY] || []
     lines.splice(index, 1)
-    if (lines.length) store[MCAP_KEY] = lines
-    else delete store[MCAP_KEY]
+    if (lines.length) store[BTC_KEY] = lines
+    else delete store[BTC_KEY]
     saveTrendStore(store)
     setTrendVersion((v) => v + 1)
     setTrashAt(null)
@@ -266,7 +277,7 @@ export default function McapChart({ onClose }) {
 
   const clearTrendlines = () => {
     const store = loadTrendStore()
-    delete store[MCAP_KEY]
+    delete store[BTC_KEY]
     saveTrendStore(store)
     setTrendVersion((v) => v + 1)
     setTrashAt(null)
@@ -275,18 +286,18 @@ export default function McapChart({ onClose }) {
   // Portal to <body>: the top bar's backdrop-filter would otherwise trap this
   // fixed-position overlay inside the bar.
   return createPortal(
-    <div className="mcap-modal">
+    <div className="btc-modal">
       <div className="chart-head">
         <div className="chart-title">
-          <span className="ct-coin">Total crypto market cap</span>
-          <span className="ct-sub">· CoinGecko · top-coin sum scaled to global total</span>
+          <span className="ct-coin">Bitcoin — BTC/USD</span>
+          <span className="ct-sub">· Hyperliquid · daily closes</span>
         </div>
         <div className="chart-intervals">
           {RANGES.map((r) => (
             <button
-              key={r.value}
-              className={`iv ${range === r.value ? 'active' : ''}`}
-              onClick={() => setRange(r.value)}
+              key={r.label}
+              className={`iv ${range === r.bars ? 'active' : ''}`}
+              onClick={() => setRange(r.bars)}
             >
               {r.label}
             </button>
@@ -309,7 +320,7 @@ export default function McapChart({ onClose }) {
           </button>
         </div>
       </div>
-      <div className="chart-wrap mcap-body">
+      <div className="chart-wrap btc-body">
         <div className="chart-body" style={{ height: '100%' }} ref={bodyRef} />
         {loading && <div className="chart-status">loading…</div>}
         {err && <div className="chart-status err">chart error: {err}</div>}

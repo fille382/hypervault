@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createChart,
   createSeriesMarkers,
@@ -17,7 +17,17 @@ import {
   tradingViewUrl,
 } from '../format.js'
 import CoinIcon from './CoinIcon.jsx'
+import CoinPicker from './CoinPicker.jsx'
 import { loadTrendStore, saveTrendStore, rayPoints, TREND_OPTS } from '../trendlines.js'
+import {
+  loadAlertStore,
+  addAlert,
+  removeAlert,
+  lineValueAt,
+  ALERTS_EVENT,
+  NEAR_PCT,
+} from '../alerts.js'
+import { TradeDotsPrimitive } from '../tradeDots.js'
 
 const TIMEFRAMES = [
   { label: '5m', value: '5m' },
@@ -71,8 +81,43 @@ const MARKER_BUDGET = {
   '1M': { count: 6, by: 'notional' },
 }
 
+// Live tail: how often the chart re-fetches its newest bars so the forming
+// candle tracks the market between full reloads. Scales with the timeframe —
+// a 5m scalping chart needs to feel live, a monthly can relax. The backend
+// throttles the upstream fetch, so polling here is mostly a local read.
+const LIVE_REFRESH_MS = {
+  '5m': 4000,
+  '15m': 4000,
+  '1h': 5000,
+  '4h': 6000,
+  '1d': 8000,
+  '3d': 8000,
+  '1w': 10000,
+  '1M': 10000,
+}
+const LIVE_TAIL_BARS = 3 // the forming bar plus a couple just-closed ones
+
+// A failed initial load retries at this pace until it lands. The failures are
+// transient (backend restarting mid-edit, upstream hiccup/rate budget) and the
+// live-tail poller can't recover an empty chart, so without this one bad fetch
+// would leave the chart dead until you switched coin or timeframe.
+const LOAD_RETRY_MS = 4000
+
 // How many of YOUR own trades to mark on the chart (most recent on the coin).
 const MY_MARKER_BUDGET = 60
+
+// Trade-marker style: 'dots' draws a small dot at the exact fill price just
+// right of the candle (easy to read where you actually sold); 'arrows' is the
+// classic above/below-bar arrow look. Persisted across sessions.
+const MARKER_STYLE_KEY = 'hypervault.markerStyle'
+const loadMarkerStyle = () => {
+  try {
+    const v = localStorage.getItem(MARKER_STYLE_KEY)
+    return v === 'arrows' ? 'arrows' : 'dots'
+  } catch {
+    return 'dots'
+  }
+}
 // Colours for YOUR trade markers — vivid green up (long / profit) and coral
 // down (short / loss), a touch brighter than the candles so they read clearly.
 const MY_COLORS = { up: '#22e07a', down: '#ff4d6d' }
@@ -137,6 +182,8 @@ export default function ChartPanel({
   myFills = [],
   onTimeframe,
   onSelectVault,
+  meta = {},
+  onSelectCoin,
 }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
@@ -145,6 +192,7 @@ export default function ChartPanel({
   const peerLinesRef = useRef([])
   const myLinesRef = useRef([])
   const markersRef = useRef(null)
+  const tradeDotsRef = useRef(null)
   const candleTimesRef = useRef([])
   const [timeframe, setTimeframe] = useState('3d')
   const [loading, setLoading] = useState(false)
@@ -153,6 +201,7 @@ export default function ChartPanel({
   const [hiddenVaults, setHiddenVaults] = useState(() => new Set()) // addr(lower) with markers off
   const [fullscreen, setFullscreen] = useState(false)
   const [showMyTrades, setShowMyTrades] = useState(true) // your own trade markers
+  const [markerStyle, setMarkerStyle] = useState(loadMarkerStyle) // 'dots' | 'arrows'
   const hasMyTrades = useMemo(() => myFills.some((f) => f.coin === coin), [myFills, coin])
   // Tell the app the timeframe so it can scale its live-data poll cadence.
   useEffect(() => onTimeframe?.(timeframe), [timeframe, onTimeframe])
@@ -164,6 +213,12 @@ export default function ChartPanel({
   const [trashAt, setTrashAt] = useState(null) // {x, y, index} near a line's left anchor
   const trendSeriesRef = useRef([]) // [{ series, ln }] for the current coin
   const draftRef = useRef(null) // { t1, p1, series } while drawing
+  // Price alerts: click a price to get notified when the market closes in on
+  // it. Lines live in localStorage (see alerts.js); App.jsx does the checking.
+  const [alertMode, setAlertMode] = useState(false)
+  const [alertsVersion, setAlertsVersion] = useState(0) // bumps when alerts change
+  const [alertTrashAt, setAlertTrashAt] = useState(null) // {x, y, id} near an alert line
+  const alertLinesRef = useRef([]) // createPriceLine handles for the current coin
   // Lazy history loading (scroll to the left edge to fetch older candles).
   const candlesRef = useRef([]) // the full loaded candle array, oldest-first
   const loadingMoreRef = useRef(false) // guard against overlapping history fetches
@@ -234,6 +289,9 @@ export default function ChartPanel({
     chartRef.current = chart
     seriesRef.current = series
     markersRef.current = createSeriesMarkers(series, [])
+    const tradeDots = new TradeDotsPrimitive()
+    series.attachPrimitive(tradeDots)
+    tradeDotsRef.current = tradeDots
     // Lazy-load older history once the user scrolls near the left edge.
     const onRange = (range) => {
       if (range && range.from < LOAD_MORE_THRESHOLD) loadMoreRef.current?.()
@@ -245,6 +303,7 @@ export default function ChartPanel({
       chartRef.current = null
       seriesRef.current = null
       markersRef.current = null
+      tradeDotsRef.current = null
       linesRef.current = []
       peerLinesRef.current = []
       myLinesRef.current = []
@@ -252,40 +311,53 @@ export default function ChartPanel({
     }
   }, [])
 
-  // Load candles whenever the coin or timeframe changes.
+  // Load candles whenever the coin or timeframe changes. Failures schedule a
+  // retry (see LOAD_RETRY_MS) — the error banner stays up until a retry lands.
   useEffect(() => {
     if (!coin || !seriesRef.current) return undefined
     let cancelled = false
+    let retryTimer = null
     setLoading(true)
     setErr(null)
     noMoreHistoryRef.current = false
     loadingMoreRef.current = false
-    getCandles(coin, timeframe, BARS[timeframe] || 300)
-      .then((data) => {
-        if (cancelled || !seriesRef.current) return
-        const candles = data.candles || []
-        candlesRef.current = candles
-        seriesRef.current.setData(withFutureRoom(candles))
-        candleTimesRef.current = candles.map((c) => c.time)
-        setCandleTick((t) => t + 1)
-        // Default to the most recent DEFAULT_VISIBLE bars (with a little right
-        // margin) rather than fitting all of history — the rest is loaded and
-        // sits off-screen to the left, so you can scroll back for more.
-        if (candles.length) {
-          const from = Math.max(0, candles.length - DEFAULT_VISIBLE)
-          chartRef.current?.timeScale().setVisibleLogicalRange({ from, to: candles.length + 6 })
-        }
-        // Re-enable price auto-scaling. Dragging/double-clicking the price axis
-        // turns it off, and that would otherwise persist across coin switches —
-        // leaving the chart stuck on the previous coin's price range.
-        chartRef.current?.priceScale('right').applyOptions({ autoScale: true })
-      })
-      .catch((e) => {
-        if (!cancelled) setErr(e.message)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    // Drop the previous coin/timeframe's candles NOW, not on fetch success:
+    // the live-tail poller merges into whatever this holds, and while the load
+    // is in flight it would otherwise splice the new coin's tail bars into the
+    // old coin's series (same 3d/1d time buckets, wildly different prices).
+    candlesRef.current = []
+    candleTimesRef.current = []
+    const load = () =>
+      getCandles(coin, timeframe, BARS[timeframe] || 300)
+        .then((data) => {
+          if (cancelled || !seriesRef.current) return
+          setErr(null)
+          const candles = data.candles || []
+          candlesRef.current = candles
+          seriesRef.current.setData(withFutureRoom(candles))
+          candleTimesRef.current = candles.map((c) => c.time)
+          setCandleTick((t) => t + 1)
+          // Default to the most recent DEFAULT_VISIBLE bars (with a little right
+          // margin) rather than fitting all of history — the rest is loaded and
+          // sits off-screen to the left, so you can scroll back for more.
+          if (candles.length) {
+            const from = Math.max(0, candles.length - DEFAULT_VISIBLE)
+            chartRef.current?.timeScale().setVisibleLogicalRange({ from, to: candles.length + 6 })
+          }
+          // Re-enable price auto-scaling. Dragging/double-clicking the price axis
+          // turns it off, and that would otherwise persist across coin switches —
+          // leaving the chart stuck on the previous coin's price range.
+          chartRef.current?.priceScale('right').applyOptions({ autoScale: true })
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setErr(e.message)
+          retryTimer = setTimeout(load, LOAD_RETRY_MS)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    load()
 
     // Fetch an older chunk (ending at the current oldest bar) and prepend it,
     // keeping the same bars in view so the chart doesn't jump.
@@ -328,7 +400,62 @@ export default function ChartPanel({
 
     return () => {
       cancelled = true
+      clearTimeout(retryTimer)
       loadMoreRef.current = null
+    }
+  }, [coin, timeframe])
+
+  // Live tail: keep the forming bar (and any bar that just closed) current,
+  // so the chart's last price tracks the market instead of freezing at
+  // whatever it was when the coin/timeframe last loaded.
+  useEffect(() => {
+    if (!coin) return undefined
+    let cancelled = false
+    const refresh = async () => {
+      if (document.hidden || loadingMoreRef.current) return
+      const existing = candlesRef.current
+      if (!seriesRef.current || !existing.length) return
+      try {
+        const data = await getCandles(coin, timeframe, LIVE_TAIL_BARS)
+        // Bail if the coin switched or a history load replaced the data
+        // while we were in flight — merging into the old array would be wrong.
+        if (cancelled || !seriesRef.current || candlesRef.current !== existing) return
+        const last = existing.at(-1)
+        const fresh = (data.candles || []).filter((c) => c.time >= last.time)
+        if (!fresh.length) return
+        const grew = fresh.at(-1).time > last.time
+        if (!grew) {
+          const c = fresh.at(-1)
+          if (
+            c.open === last.open &&
+            c.high === last.high &&
+            c.low === last.low &&
+            c.close === last.close
+          )
+            return // nothing moved since the previous tick
+        }
+        const byTime = new Map(existing.map((c) => [c.time, c]))
+        for (const c of fresh) byTime.set(c.time, c)
+        const merged = [...byTime.values()].sort((a, b) => a.time - b.time)
+        const ts = chartRef.current?.timeScale()
+        const view = ts?.getVisibleLogicalRange()
+        candlesRef.current = merged
+        seriesRef.current.setData(withFutureRoom(merged))
+        // Bars only changed at the right edge, so logical indices are stable —
+        // restoring the exact range keeps the user's scroll/zoom untouched.
+        if (ts && view) ts.setVisibleLogicalRange(view)
+        if (grew) {
+          candleTimesRef.current = merged.map((c) => c.time)
+          setCandleTick((t) => t + 1) // markers/trendlines re-snap to the new bar
+        }
+      } catch {
+        /* transient — the next tick retries */
+      }
+    }
+    const id = setInterval(refresh, LIVE_REFRESH_MS[timeframe] || 8000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
     }
   }, [coin, timeframe])
 
@@ -421,17 +548,23 @@ export default function ChartPanel({
   }, [peers, coin, timeframe])
 
   // Trade markers, AGGREGATED per candle: a vault (or you) that fires many
-  // trades inside one bar shows a single arrow with the combined total + count,
-  // instead of a tower of arrows that instantly exhausts the marker budget.
-  //   ▲ below the bar = buy/long · ▼ above the bar = sell/short · ■ = your close
+  // trades inside one bar shows a single marker with the combined total + count,
+  // instead of a tower of markers that instantly exhausts the marker budget.
+  // Two styles (toggle in the marker strip):
+  //   dots   — a dot at the exact (size-weighted) fill price, just right of the
+  //            candle: green = buy/long, red = sell/short, white ring = you
+  //   arrows — ▲ below = buy/long · ▼ above = sell/short · ■ = your close
   useEffect(() => {
     const sm = markersRef.current
-    if (!sm) return
+    const dots = tradeDotsRef.current
+    if (!sm || !dots) return
     const times = candleTimesRef.current
     if (!coin || !times.length) {
       sm.setMarkers([])
+      dots.setDots([])
       return
     }
+    const asDots = markerStyle === 'dots'
 
     // Followed vaults: collapse fills into one bucket per (candle, vault, side).
     const budget = MARKER_BUDGET[timeframe] || { count: 15, by: 'notional' }
@@ -444,21 +577,24 @@ export default function ChartPanel({
       const key = `${t}|${f.address.toLowerCase()}|${f.side}`
       let b = vaultBuckets.get(key)
       if (!b) {
-        b = { time: t, vault: f.vault, side: f.side, notional: 0, count: 0 }
+        b = { time: t, vault: f.vault, side: f.side, notional: 0, size: 0, count: 0 }
         vaultBuckets.set(key, b)
       }
       b.notional += (f.sz || 0) * (f.px || 0)
+      b.size += f.sz || 0
       b.count += 1
     }
     const selected = [...vaultBuckets.values()]
       .sort((a, b) => (budget.by === 'time' ? b.time - a.time : b.notional - a.notional))
       .slice(0, budget.count)
 
-    // Scale arrow size by sqrt(total notional) within the selected set.
+    // Scale marker size by sqrt(total notional) within the selected set.
     const roots = selected.map((b) => Math.sqrt(b.notional))
     const lo = Math.min(...roots)
     const hi = Math.max(...roots)
-    const sizeFor = (n) => (hi === lo ? 1.2 : 0.8 + ((Math.sqrt(n) - lo) / (hi - lo)) * 1.6)
+    const frac = (n) => (hi === lo ? 0.5 : (Math.sqrt(n) - lo) / (hi - lo))
+    const sizeFor = (n) => 0.8 + frac(n) * 1.6 // arrow size 0.8..2.4
+    const radiusFor = (n) => 3 + frac(n) * 4 // dot radius 3..7 px
 
     // Label the biggest few, one per candle, so text doesn't stack.
     const labelled = new Set()
@@ -469,27 +605,47 @@ export default function ChartPanel({
       labelledTimes.add(b.time)
       labelled.add(b)
     }
+    const vaultText = (b, buy) =>
+      `${(b.vault || '').slice(0, 10)} ${buy ? 'Buy' : 'Sell'} ${fmtUsd(b.notional, 0)}${
+        b.count > 1 ? ` ×${b.count}` : ''
+      }`
 
-    const vaultMarkers = selected.map((b) => {
+    // The bucket's size-weighted average fill price — where the dot sits.
+    const avgPx = (b) => (b.size > 0 ? b.notional / b.size : 0)
+
+    const vaultMarkers = []
+    const vaultDots = []
+    for (const b of selected) {
       const buy = b.side === 'buy'
-      return {
-        time: b.time,
-        position: buy ? 'belowBar' : 'aboveBar',
-        color: buy ? '#34e2a8' : '#ff5d73',
-        shape: buy ? 'arrowUp' : 'arrowDown',
-        size: sizeFor(b.notional),
-        text: labelled.has(b)
-          ? `${(b.vault || '').slice(0, 10)} ${buy ? 'Buy' : 'Sell'} ${fmtUsd(b.notional, 0)}${
-              b.count > 1 ? ` ×${b.count}` : ''
-            }`
-          : undefined,
+      const text = labelled.has(b) ? vaultText(b, buy) : undefined
+      if (asDots) {
+        const price = avgPx(b)
+        if (price > 0)
+          vaultDots.push({
+            time: b.time,
+            price,
+            r: radiusFor(b.notional),
+            color: buy ? '#34e2a8' : '#ff5d73',
+            label: text,
+          })
+      } else {
+        vaultMarkers.push({
+          time: b.time,
+          position: buy ? 'belowBar' : 'aboveBar',
+          color: buy ? '#34e2a8' : '#ff5d73',
+          shape: buy ? 'arrowUp' : 'arrowDown',
+          size: sizeFor(b.notional),
+          text,
+        })
       }
-    })
+    }
 
-    // YOUR OWN trades, aggregated per (candle, long/short/close):
-    //   ▲ up = long open · ▼ down = short open · ■ square = close (P/L coloured)
-    // The label is just the amount: an open shows total USD, a close total PnL.
-    let myMarkers = []
+    // YOUR OWN trades, aggregated per (candle, long/short/close). Dots get a
+    // white ring so your fills stand apart from the vaults'; closes are
+    // coloured by P/L. The label is just the amount: an open shows total USD,
+    // a close total PnL.
+    const myMarkers = []
+    const myDots = []
     if (showMyTrades && myFills.length) {
       const myBuckets = new Map()
       for (const f of myFills) {
@@ -501,16 +657,17 @@ export default function ChartPanel({
         const key = `${t}|${cat}`
         let b = myBuckets.get(key)
         if (!b) {
-          b = { time: t, cat, notional: 0, pnl: 0, count: 0 }
+          b = { time: t, cat, notional: 0, size: 0, pnl: 0, count: 0 }
           myBuckets.set(key, b)
         }
         b.notional += (f.sz || 0) * (f.px || 0)
+        b.size += f.sz || 0
         b.pnl += f.closedPnl || 0
         b.count += 1
       }
       const mine = [...myBuckets.values()].sort((a, b) => b.time - a.time).slice(0, MY_MARKER_BUDGET)
       let myLabels = 0
-      myMarkers = mine.map((b) => {
+      for (const b of mine) {
         const suffix = b.count > 1 ? ` ×${b.count}` : ''
         const text =
           myLabels++ < 10
@@ -518,25 +675,31 @@ export default function ChartPanel({
               ? `${fmtSignedUsd(b.pnl)}${suffix}`
               : `${fmtUsd(b.notional, 0)}${suffix}`
             : undefined
-        if (b.cat === 'close') {
-          const up = b.pnl >= 0
-          return { time: b.time, position: 'inBar', shape: 'square', size: 1.4, color: up ? MY_COLORS.up : MY_COLORS.down, text }
+        const close = b.cat === 'close'
+        const up = close ? b.pnl >= 0 : b.cat === 'long'
+        const color = up ? MY_COLORS.up : MY_COLORS.down
+        if (asDots) {
+          const price = avgPx(b)
+          if (price > 0)
+            myDots.push({ time: b.time, price, r: 4.5, color, ring: '#e8eef0', label: text })
+        } else if (close) {
+          myMarkers.push({ time: b.time, position: 'inBar', shape: 'square', size: 1.4, color, text })
+        } else {
+          myMarkers.push({
+            time: b.time,
+            position: b.cat === 'long' ? 'belowBar' : 'aboveBar',
+            shape: b.cat === 'long' ? 'arrowUp' : 'arrowDown',
+            size: 2,
+            color,
+            text,
+          })
         }
-        const long = b.cat === 'long'
-        return {
-          time: b.time,
-          position: long ? 'belowBar' : 'aboveBar',
-          shape: long ? 'arrowUp' : 'arrowDown',
-          size: 2,
-          color: long ? MY_COLORS.up : MY_COLORS.down,
-          text,
-        }
-      })
+      }
     }
 
-    const markers = [...vaultMarkers, ...myMarkers].sort((a, b) => a.time - b.time)
-    sm.setMarkers(markers)
-  }, [fills, myFills, coin, candleTick, hiddenVaults, timeframe, showMyTrades])
+    sm.setMarkers([...vaultMarkers, ...myMarkers].sort((a, b) => a.time - b.time))
+    dots.setDots([...vaultDots, ...myDots])
+  }, [fills, myFills, coin, candleTick, hiddenVaults, timeframe, showMyTrades, markerStyle])
 
   // Mount saved trendlines for the current coin — each rendered as a ray
   // extending +10 years past its second anchor.
@@ -560,6 +723,94 @@ export default function ChartPanel({
     }
     setHasTrendlines(lines.length > 0)
   }, [coin, trendVersion, candleTick])
+
+  // Re-render alert lines whenever the store changes — from this component's
+  // own tool, or externally (App.jsx removes an alert once it's hit).
+  useEffect(() => {
+    const bump = () => setAlertsVersion((v) => v + 1)
+    window.addEventListener(ALERTS_EVENT, bump)
+    return () => window.removeEventListener(ALERTS_EVENT, bump)
+  }, [])
+
+  // Mount the current coin's price alerts as dashed horizontal lines.
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    alertLinesRef.current.forEach((l) => {
+      try {
+        series.removePriceLine(l)
+      } catch {
+        /* already gone */
+      }
+    })
+    alertLinesRef.current = []
+    const alerts = coin ? loadAlertStore()[coin] || [] : []
+    for (const a of alerts) {
+      alertLinesRef.current.push(
+        series.createPriceLine({
+          price: a.px,
+          color: '#ffce5c', // amber — same family as your drawn trendlines
+          lineStyle: 2,
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: '🔔 alert',
+        }),
+      )
+    }
+  }, [coin, alertsVersion])
+
+  // Alert placement: one click on the chart sets the level; the market side
+  // it's approached from (the current mark price) is captured with it.
+  useEffect(() => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series || !alertMode || !coin) return undefined
+    const onClick = (param) => {
+      if (!param?.point) return
+      const price = series.coordinateToPrice(param.point.y)
+      if (price == null || price <= 0) return
+      const markPx = meta[coin]?.markPx || candlesRef.current.at(-1)?.close || price
+      addAlert(coin, price, markPx)
+      setAlertMode(false)
+    }
+    chart.subscribeClick(onClick)
+    return () => chart.unsubscribeClick(onClick)
+  }, [alertMode, coin, meta])
+
+  // Hovering near an alert line shows a floating delete button. It keeps the
+  // x where it first appeared so it doesn't chase the cursor along the line.
+  useEffect(() => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series || !coin || alertMode || drawMode) {
+      setAlertTrashAt(null)
+      return undefined
+    }
+    const alerts = loadAlertStore()[coin] || []
+    if (!alerts.length) {
+      setAlertTrashAt(null)
+      return undefined
+    }
+    const onMove = (param) => {
+      // No point = cursor left the pane (possibly onto the trash button
+      // itself) — keep the current state so the button stays clickable.
+      if (!param?.point) return
+      let best = null
+      for (const a of alerts) {
+        const y = series.priceToCoordinate(a.px)
+        if (y == null) continue
+        const dy = Math.abs(param.point.y - y)
+        if (dy <= 8 && (!best || dy < best.dy)) best = { y, dy, id: a.id }
+      }
+      setAlertTrashAt((prev) => {
+        if (!best) return prev ? null : prev
+        if (prev && prev.id === best.id) return prev.y === best.y ? prev : { ...prev, y: best.y }
+        return { x: param.point.x, y: best.y, id: best.id }
+      })
+    }
+    chart.subscribeCrosshairMove(onMove)
+    return () => chart.unsubscribeCrosshairMove(onMove)
+  }, [coin, alertMode, drawMode, alertsVersion])
 
   // Trendline drawing: two clicks define a line; crosshair previews it live.
   useEffect(() => {
@@ -611,6 +862,12 @@ export default function ChartPanel({
       if (d.raf) cancelAnimationFrame(d.raf)
       const pts = [{ time: d.t1, value: d.p1 }, pt].sort((x, y) => x.time - y.time)
       const ln = { t1: pts[0].time, p1: pts[0].value, t2: pts[1].time, p2: pts[1].value }
+      // Record which side of the line the market is on right now, so the
+      // cross-alert (see alerts.js) fires even for a cross that happens
+      // while the app is closed.
+      const markPx = candlesRef.current.at(-1)?.close
+      const lv = markPx ? lineValueAt(ln, Date.now() / 1000) : null
+      if (lv != null && lv > 0) ln.alertSide = markPx > lv ? 1 : markPx < lv ? -1 : 0
       // Keep the drawn series mounted — rendered as a +10y ray from here on.
       d.series.setData(rayPoints(ln, candleStep()))
       trendSeriesRef.current.push({ series: d.series, ln })
@@ -715,18 +972,50 @@ export default function ChartPanel({
     }
   }, [measureMode])
 
-  // Esc exits measure/draw mode first, then fullscreen.
+  // Esc exits measure/draw/alert mode first, then fullscreen.
   useEffect(() => {
-    if (!fullscreen && !drawMode && !measureMode) return undefined
+    if (!fullscreen && !drawMode && !measureMode && !alertMode) return undefined
     const onKey = (e) => {
       if (e.key !== 'Escape') return
       if (measureMode) setMeasureMode(false)
       else if (drawMode) setDrawMode(false)
+      else if (alertMode) setAlertMode(false)
       else setFullscreen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [fullscreen, drawMode, measureMode])
+  }, [fullscreen, drawMode, measureMode, alertMode])
+
+  // The floating 🗑 buttons sit ON TOP of the chart, so a wheel gesture over
+  // one isn't caught by the chart's canvas — nothing preventDefaults it and
+  // the browser zooms/scrolls the PAGE instead. Forward the gesture to the
+  // chart (so zooming continues seamlessly) and duck out of the way.
+  const trashWheelRef = useCallback((el) => {
+    if (!el) return
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault()
+        containerRef.current?.querySelector('canvas')?.dispatchEvent(
+          new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            deltaX: e.deltaX,
+            deltaY: e.deltaY,
+            deltaMode: e.deltaMode,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            ctrlKey: e.ctrlKey,
+          }),
+        )
+        // You're zooming, not deleting — hide the buttons so the rest of the
+        // gesture hits the chart directly. They re-appear on the next hover.
+        setTrashAt(null)
+        setAlertTrashAt(null)
+      },
+      { passive: false },
+    )
+  }, [])
 
   const clearTrendlines = () => {
     const store = loadTrendStore()
@@ -789,10 +1078,7 @@ export default function ChartPanel({
         <div className="chart-title">
           {coin ? (
             <>
-              <CoinIcon coin={coin} size={22} className="ct-icon" />
-              <span className="ct-coin" title={coin}>
-                {coinLabel(coin)}
-              </span>
+              <CoinPicker coin={coin} meta={meta} onSelectCoin={onSelectCoin} />
               <span className="ct-sub">· Hyperliquid</span>
             </>
           ) : (
@@ -816,6 +1102,7 @@ export default function ChartPanel({
             disabled={!coin}
             onClick={() => {
               setDrawMode(false)
+              setAlertMode(false)
               setMeasureMode((o) => !o)
             }}
           >
@@ -823,14 +1110,27 @@ export default function ChartPanel({
           </button>
           <button
             className={`iv ${drawMode ? 'active' : ''}`}
-            title="Draw a trendline: click two points (Esc cancels)"
+            title="Draw a trendline: click two points — you're notified when the price closes in on it or crosses it (Esc cancels)"
             disabled={!coin}
             onClick={() => {
               setMeasureMode(false)
+              setAlertMode(false)
               setDrawMode((o) => !o)
             }}
           >
             ✏ Line
+          </button>
+          <button
+            className={`iv ${alertMode ? 'active' : ''}`}
+            title={`Price alert: click a price on the chart — you're notified when the market closes in (within ${NEAR_PCT}%) and when it hits (Esc cancels)`}
+            disabled={!coin}
+            onClick={() => {
+              setMeasureMode(false)
+              setDrawMode(false)
+              setAlertMode((o) => !o)
+            }}
+          >
+            🔔 Alert
           </button>
           {hasTrendlines && (
             <button className="iv" title="Remove all trendlines for this coin" onClick={clearTrendlines}>
@@ -897,6 +1197,27 @@ export default function ChartPanel({
               </button>
             )
           })}
+          <button
+            className="marker-chip style-toggle"
+            title={
+              markerStyle === 'dots'
+                ? 'Dots at the exact fill price — click for the classic arrows'
+                : 'Classic arrows — click for dots at the exact fill price'
+            }
+            onClick={() =>
+              setMarkerStyle((s) => {
+                const next = s === 'dots' ? 'arrows' : 'dots'
+                try {
+                  localStorage.setItem(MARKER_STYLE_KEY, next)
+                } catch {
+                  /* ignore storage errors */
+                }
+                return next
+              })
+            }
+          >
+            {markerStyle === 'dots' ? '◉ Dots' : '⬆ Arrows'}
+          </button>
         </div>
       )}
       <div className="chart-wrap">
@@ -955,6 +1276,7 @@ export default function ChartPanel({
         {err && <div className="chart-status err">chart error: {err}</div>}
         {trashAt && !drawMode && (
           <button
+            ref={trashWheelRef}
             className="trend-trash"
             style={{ left: trashAt.x, top: trashAt.y }}
             title="Delete this trendline"
@@ -968,6 +1290,25 @@ export default function ChartPanel({
             {draftRef.current ? 'click the second point' : 'click two points to draw a trendline'} ·
             Esc cancels
           </div>
+        )}
+        {alertMode && (
+          <div className="draw-hint">
+            click a price to set an alert — notices land in Trade history · Esc cancels
+          </div>
+        )}
+        {alertTrashAt && !drawMode && !alertMode && (
+          <button
+            ref={trashWheelRef}
+            className="trend-trash"
+            style={{ left: alertTrashAt.x, top: alertTrashAt.y }}
+            title="Remove this price alert"
+            onClick={() => {
+              removeAlert(coin, alertTrashAt.id)
+              setAlertTrashAt(null)
+            }}
+          >
+            🗑
+          </button>
         )}
       </div>
     </div>

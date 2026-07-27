@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { fmtUsd, fmtSignedUsd } from '../format.js'
-import { getMcapHistory } from '../api.js'
-import McapChart from './McapChart.jsx'
+import { getCandles } from '../api.js'
+import BtcChart from './BtcChart.jsx'
 import AccountCard from './AccountCard.jsx'
 
-const fmtTrillions = (v) =>
-  v >= 1e12 ? `$${(v / 1e12).toFixed(2)}T` : `$${(v / 1e9).toFixed(0)}B`
+const fmtBtcPx = (v) => `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
 
 // Super-basic inline sparkline for the top bar chip.
 function Sparkline({ points, width = 110, height = 30 }) {
@@ -22,7 +21,7 @@ function Sparkline({ points, width = 110, height = 30 }) {
     .join(' ')
   const up = vals[vals.length - 1] >= vals[0]
   return (
-    <svg width={width} height={height} className="mcap-spark">
+    <svg width={width} height={height} className="btc-spark">
       <path d={d} fill="none" stroke={up ? '#34e2a8' : '#ff5d73'} strokeWidth="1.5" />
     </svg>
   )
@@ -31,7 +30,7 @@ function Sparkline({ points, width = 110, height = 30 }) {
 export default function TopBar({
   health,
   account,
-  mcap,
+  btc,
   online = true,
   onToggleArm,
   onNewTrade,
@@ -39,17 +38,22 @@ export default function TopBar({
   refresh,
 }) {
   const [confirming, setConfirming] = useState(false)
-  const [showMcap, setShowMcap] = useState(false)
+  const [showBtc, setShowBtc] = useState(false)
   const [spark, setSpark] = useState(null)
   const [acctOpen, setAcctOpen] = useState(false)
 
-  // 90 days of market cap for the chip's sparkline (backend caches upstream).
+  // 90 days of BTC daily closes for the chip's sparkline — same Hyperliquid
+  // candle feed (and local cache) as the coin chart.
   useEffect(() => {
     let cancelled = false
     const load = () =>
-      getMcapHistory('90')
+      getCandles('BTC', '1d', 90)
         .then((d) => {
-          if (!cancelled) setSpark(d.points || [])
+          if (cancelled) return
+          const points = (d.candles || [])
+            .filter((c) => c.close != null)
+            .map((c) => ({ time: c.time, value: c.close }))
+          setSpark(points)
         })
         .catch(() => {})
     load()
@@ -62,7 +66,7 @@ export default function TopBar({
   const armed = !!health?.armed
   const network = health?.network || '…'
   const ms = account?.marginSummary
-  const capUp = (mcap?.change24h || 0) >= 0
+  const btcUp = (btc?.change24h || 0) >= 0
 
   const handleToggle = () => {
     if (!armed) setConfirming(true) // arming requires confirmation
@@ -85,20 +89,20 @@ export default function TopBar({
         </span>
       )}
 
-      {mcap?.marketCap != null && (
+      {btc?.price != null && (
         <button
-          className="mcap-chip"
-          title="Total crypto market cap (90d) — click for the full chart"
-          onClick={() => setShowMcap(true)}
+          className="btc-chip"
+          title="Bitcoin (90d, Hyperliquid) — click for the full chart"
+          onClick={() => setShowBtc(true)}
         >
           <Sparkline points={spark} />
           <div>
-            <div className="label">Crypto mkt cap</div>
+            <div className="label">BTC / USD</div>
             <div className="val num">
-              {fmtTrillions(mcap.marketCap)}{' '}
-              <span className={capUp ? 'pos' : 'neg'}>
-                {capUp ? '▲' : '▼'}
-                {Math.abs(mcap.change24h || 0).toFixed(2)}%
+              {fmtBtcPx(btc.price)}{' '}
+              <span className={btcUp ? 'pos' : 'neg'}>
+                {btcUp ? '▲' : '▼'}
+                {Math.abs(btc.change24h || 0).toFixed(2)}%
               </span>
             </div>
           </div>
@@ -154,7 +158,7 @@ export default function TopBar({
         </button>
       </div>
 
-      {showMcap && <McapChart onClose={() => setShowMcap(false)} />}
+      {showBtc && <BtcChart onClose={() => setShowBtc(false)} />}
 
       {confirming && (
         <div className="overlay" onClick={() => setConfirming(false)}>

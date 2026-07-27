@@ -5,14 +5,12 @@ Read endpoints (vault + account state, meta) need no key. Trading endpoints
 SAFE mode /api/order returns a simulation instead of sending anything.
 """
 import asyncio
-import json
 import logging
 import time
 
 from contextlib import asynccontextmanager
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -26,9 +24,10 @@ from .hl_info import (
     parse_margin_summary,
     parse_meta_ctxs,
     parse_positions,
+    parse_spot_meta_ctxs,
     value_spot_balances,
 )
-from .hl_trade import HLTrader, TradingNotConfigured
+from .hl_trade import HLTrader, TradingNotConfigured, UpstreamRateLimited
 from .hl_ws import HLWebSocketFeed, parse_book
 from .models import (
     ArmRequest,
@@ -36,6 +35,7 @@ from .models import (
     CredentialsRequest,
     LeverageRequest,
     OrderRequest,
+    SpotOrderRequest,
     TpslRequest,
 )
 from .safety import safety
@@ -45,7 +45,6 @@ logger = logging.getLogger("hypervault")
 
 info = HLInfo(settings.base_url)
 trader = HLTrader(settings)
-coingecko = httpx.AsyncClient(base_url="https://api.coingecko.com/api/v3", timeout=20.0)
 # Local candle cache so we don't re-fetch closed bars from Hyperliquid every time.
 candle_store = CandleStore(BACKEND_DIR / "data" / "candles.db")
 # Durable per-address trade history (your own fills), persisted across sessions.
@@ -67,7 +66,6 @@ async def lifespan(_app: FastAPI):
     yield
     await ws_feed.stop()
     await info.aclose()
-    await coingecko.aclose()
     candle_store.close()
     fill_store.close()
 
@@ -219,6 +217,26 @@ async def meta():
         raise HTTPException(status_code=502, detail=f"Failed to fetch meta: {exc}") from exc
 
 
+async def _spot_meta() -> dict:
+    """Tradeable spot pairs with mark prices, keyed by "BASE/QUOTE" display name.
+
+    Cached briefly — the order ticket polls this while its Spot tab is open.
+    """
+
+    async def fetch() -> dict:
+        return parse_spot_meta_ctxs(await info.spot_meta_and_asset_ctxs())
+
+    return await _cached("spotMeta", 15, fetch)
+
+
+@app.get("/api/spot/meta")
+async def spot_meta():
+    try:
+        return await _spot_meta()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Failed to fetch spot meta: {exc}") from exc
+
+
 @app.get("/api/vault/{address}")
 async def vault(address: str):
     address = address.strip()
@@ -297,7 +315,10 @@ async def fills(addresses: str, hours: float = 24, limit: int = 60):
 
     async def one(addr: str) -> list[dict]:
         try:
-            raw = await info.user_fills(addr)
+            # userFills is one of the heaviest /info calls (weight 20). A short
+            # TTL cache keeps N vaults × 20s polling well inside the IP budget;
+            # `hours`/`limit` only filter locally, so they can share one entry.
+            raw = await _cached(f"fills:{addr.lower()}", 15, lambda: info.user_fills(addr))
         except Exception:  # noqa: BLE001 — a dead address shouldn't fail the batch
             return []
         return [
@@ -390,7 +411,7 @@ _INTERVAL_MS = {
 
 # Candle cache: we store closed bars locally and only hit Hyperliquid for the
 # live tail (throttled) or to backfill older history we don't have yet.
-CANDLE_TAIL_TTL = 10.0  # seconds between live-tail refreshes per (coin, interval)
+CANDLE_TAIL_TTL = 5.0  # seconds between live-tail refreshes per (coin, interval) — candleSnapshot is weight 20
 _candle_tail: dict[str, float] = {}  # key -> last tail-refresh time
 _candle_floor: set[str] = set()  # keys where we've confirmed no older history exists
 
@@ -446,21 +467,27 @@ async def candles(coin: str, interval: str = "1h", bars: int = 200, before: int 
 
 
 @app.get("/api/book/{coin}")
-async def book(coin: str, levels: int = 15):
+async def book(coin: str, levels: int = 15, sig: int = 0, mantissa: int = 0):
     """Live order book for a coin, served from the websocket feed.
 
     The first request for a coin subscribes it (and falls back to one REST
     snapshot while the subscription warms up); after that it's pure push data
     and this endpoint never touches Hyperliquid, so the UI can poll it fast.
+
+    `sig` (nSigFigs 2-5) groups levels into coarser price buckets upstream;
+    `mantissa` (2 or 5, only with sig=5) picks the in-between steps. 0 = the
+    coin's native tick. Changing grouping swaps the ws subscription.
     """
     levels = max(1, min(int(levels), 20))  # Hyperliquid sends up to 20 per side
-    await ws_feed.ensure_book(coin)
-    data = ws_feed.book(coin)
+    n_sig = sig if sig in (2, 3, 4, 5) else None
+    n_man = mantissa if (n_sig == 5 and mantissa in (2, 5)) else None
+    await ws_feed.ensure_book(coin, n_sig, n_man)
+    data = ws_feed.book(coin, n_sig, n_man)
     if data is None:
-        # Cold start: the ws subscription hasn't delivered yet. One REST
-        # snapshot bridges the gap (throttled by the ws cache thereafter).
+        # Cold start (or a just-changed grouping): the ws subscription hasn't
+        # delivered yet. One REST snapshot at the same grouping bridges the gap.
         try:
-            data = parse_book(await info.l2_book(coin))
+            data = parse_book(await info.l2_book(coin, n_sig, n_man))
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"Order book unavailable: {exc}") from exc
         if data is None:
@@ -473,7 +500,8 @@ async def book(coin: str, levels: int = 15):
     return {
         "coin": coin,
         "time": data.get("time"),
-        "live": ws_feed.book(coin) is not None,  # false only on the REST fallback
+        # false only on the REST fallback
+        "live": ws_feed.book(coin, n_sig, n_man) is not None,
         "bids": bids,
         "asks": asks,
         "spread": spread,
@@ -482,113 +510,30 @@ async def book(coin: str, levels: int = 15):
     }
 
 
-# --------------------------------------------------------------------------- #
-# Total crypto market cap (CoinGecko)                                         #
-# --------------------------------------------------------------------------- #
-async def _fetch_mcap() -> dict:
-    r = await coingecko.get("/global")
-    r.raise_for_status()
-    d = (r.json() or {}).get("data", {})
+@app.get("/api/trades/{coin}")
+async def trades(coin: str, since: int = 0, limit: int = 250):
+    """Recent public trades for a coin (the tape), from the websocket buffer.
+
+    `since` (ms) returns only trades strictly newer than that timestamp, so the
+    UI can poll with a cursor and get just the delta. `stats` summarize trade
+    sizes over the whole buffer, letting the UI scale "what counts as a big
+    trade" to this market's normal activity instead of a fixed dollar figure.
+    """
+    limit = max(1, min(int(limit), 500))
+    await ws_feed.ensure_trades(coin)
+    rows = ws_feed.trades(coin, since)
+    buffer = rows if since <= 0 else ws_feed.trades(coin)
+    notionals = sorted(t["px"] * t["sz"] for t in buffer)
+    n = len(notionals)
     return {
-        "marketCap": (d.get("total_market_cap") or {}).get("usd"),
-        "change24h": d.get("market_cap_change_percentage_24h_usd"),
+        "coin": coin,
+        "trades": rows[-limit:],
+        "stats": {
+            "count": n,
+            "medianNotional": notionals[n // 2] if n else None,
+            "p95Notional": notionals[min(n - 1, int(n * 0.95))] if n else None,
+        },
     }
-
-
-@app.get("/api/mcap")
-async def mcap():
-    try:
-        return await _cached("mcap", 120, _fetch_mcap)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Market cap fetch failed: {exc}") from exc
-
-
-# CoinGecko's true global history endpoint is paid; summing the biggest coins
-# tracks the TOTAL curve closely, and we scale it to today's real global total.
-_MCAP_COINS = ["bitcoin", "ethereum", "tether", "ripple", "binancecoin", "solana"]
-
-
-# Persist the last good market-cap history to disk so a backend restart (which
-# wipes the in-memory cache) serves it instead of hammering — and 502-ing on —
-# CoinGecko's rate-limited free tier.
-def _mcap_disk_path(days: str):
-    return BACKEND_DIR / "data" / f"mcap_hist_{days}.json"
-
-
-def _save_mcap_disk(days: str, data: dict) -> None:
-    try:
-        path = _mcap_disk_path(days)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _load_mcap_disk(days: str):
-    try:
-        path = _mcap_disk_path(days)
-        if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
-@app.get("/api/mcap/history")
-async def mcap_history(days: str = "365"):
-    if days not in {"90", "365", "max"}:
-        days = "365"
-
-    async def fetch():
-        total: dict[int, float] = {}
-        fetched = 0
-        for i, cid in enumerate(_MCAP_COINS):  # sequential — free-tier rate limits
-            if i:
-                await asyncio.sleep(2.5)  # pace requests to dodge 429s
-            try:
-                r = await coingecko.get(
-                    f"/coins/{cid}/market_chart", params={"vs_currency": "usd", "days": days}
-                )
-                r.raise_for_status()
-            except Exception:  # noqa: BLE001 — tolerated below, up to one miss
-                continue
-            # Bucket to days, keeping the coin's LAST value per day — the feed
-            # mixes granularities and adds a "latest" point that would
-            # otherwise double-count today.
-            per_day: dict[int, float] = {}
-            for ts, cap in (r.json() or {}).get("market_caps", []) or []:
-                if cap:
-                    per_day[int(ts // 86_400_000) * 86_400] = cap
-            for day, cap in per_day.items():
-                total[day] = total.get(day, 0.0) + cap
-            fetched += 1
-        # Don't cache junk: a half-fetched, unscaled series would be served for
-        # hours. Raise instead — _cached keeps any previous good copy, and rate
-        # limits clear within a minute or two.
-        if fetched < len(_MCAP_COINS) - 1:
-            raise RuntimeError("CoinGecko rate limit — try again in a minute")
-        points = sorted(total.items())
-        if not points or not points[-1][1]:
-            raise RuntimeError("Empty market cap series")
-        cur = (await _cached("mcap", 120, _fetch_mcap)).get("marketCap")
-        if not cur:
-            raise RuntimeError("No global total to scale against")
-        scale = cur / points[-1][1]
-        result = {"points": [{"time": t, "value": v * scale} for t, v in points]}
-        _save_mcap_disk(days, result)  # durable copy for cold starts
-        return result
-
-    try:
-        return await _cached(f"mcapHist:{days}", 21_600, fetch)
-    except Exception:  # noqa: BLE001
-        # Rate-limited / cold cache — serve the last good copy from disk rather
-        # than 502-ing. Only fails outright if we've never fetched it before.
-        disk = _load_mcap_disk(days)
-        if disk:
-            return disk
-        raise HTTPException(
-            status_code=502, detail="Market cap history unavailable — retry in a minute."
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -705,6 +650,57 @@ async def order(req: OrderRequest):
         )
     except TradingNotConfigured as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UpstreamRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Order failed: {exc}") from exc
+    return {"simulated": False, "armed": True, **result}
+
+
+@app.post("/api/spot/order")
+async def spot_order(req: SpotOrderRequest):
+    """Market buy/sell on a spot pair — actually owning the tokens, no leverage.
+
+    Same safety model as /api/order: SAFE mode simulates from public market
+    data; ARMED sends a real order (requires a signing key).
+    """
+    _check_notional(req.notionalUsd)
+    slippage = req.slippage if req.slippage is not None else settings.default_slippage
+
+    if not safety.armed:
+        try:
+            metas = await _spot_meta()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Preview failed: {exc}") from exc
+        cm = metas.get(req.coin)
+        if not cm or not cm.get("markPx"):
+            raise HTTPException(status_code=404, detail=f"No market data for '{req.coin}'.")
+        mark = cm["markPx"]
+        szd = cm.get("szDecimals")
+        size = round(req.notionalUsd / mark, szd if szd is not None else 4)
+        return {
+            "simulated": True,
+            "armed": False,
+            "message": "SAFE mode — no order sent. Flip ARM to trade live.",
+            "would": {
+                "coin": req.coin,
+                "markPx": mark,
+                "size": size,
+                "notionalUsd": size * mark,
+                "side": req.side,
+                "slippage": slippage,
+            },
+        }
+
+    _require_trading()
+    try:
+        result = await asyncio.to_thread(
+            trader.place_spot_market, req.coin, req.side == "buy", req.notionalUsd, slippage
+        )
+    except TradingNotConfigured as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UpstreamRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Order failed: {exc}") from exc
     return {"simulated": False, "armed": True, **result}
@@ -718,6 +714,8 @@ async def leverage(req: LeverageRequest):
     is_cross = req.marginMode == "cross"
     try:
         result = await asyncio.to_thread(trader.set_leverage, req.coin, req.leverage, is_cross)
+    except UpstreamRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Set leverage failed: {exc}") from exc
     return {"result": result}
@@ -730,6 +728,8 @@ async def close(req: CloseRequest):
         raise HTTPException(status_code=409, detail="SAFE mode — flip ARM to close positions.")
     try:
         result = await asyncio.to_thread(trader.close_position, req.coin, req.size)
+    except UpstreamRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Close failed: {exc}") from exc
     return {"result": result}
@@ -746,6 +746,8 @@ async def tpsl(req: TpslRequest):
         result = await asyncio.to_thread(
             trader.set_tpsl, req.coin, req.isLong, req.size, req.takeProfitPx, req.stopLossPx
         )
+    except UpstreamRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Auto-close failed: {exc}") from exc
     return {"result": result}

@@ -13,6 +13,13 @@ class OrderRequest(BaseModel):
     slippage: Optional[float] = Field(default=None, ge=0, le=0.5)
 
 
+class SpotOrderRequest(BaseModel):
+    coin: str  # spot pair display name, e.g. "HYPE/USDC"
+    side: Literal["buy", "sell"]
+    notionalUsd: float = Field(gt=0, description="USD notional to trade (size = notional / mark).")
+    slippage: Optional[float] = Field(default=None, ge=0, le=0.5)
+
+
 class LeverageRequest(BaseModel):
     coin: str
     leverage: int = Field(ge=1, le=100)

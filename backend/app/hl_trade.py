@@ -5,12 +5,14 @@ methods through asyncio.to_thread. The Exchange is built lazily because
 constructing it performs network I/O (it loads perp/spot metadata).
 """
 import logging
-from typing import Any, Optional
+import time
+from typing import Any, Callable, Optional, TypeVar
 
 import eth_account
 import httpx
 from eth_account.signers.local import LocalAccount
 from hyperliquid.exchange import Exchange
+from hyperliquid.utils.error import ClientError
 
 from .config import PLACEHOLDER_KEY, Settings
 
@@ -19,6 +21,44 @@ logger = logging.getLogger("hypervault.trade")
 
 class TradingNotConfigured(RuntimeError):
     """Raised when an order is attempted without a signing key configured."""
+
+
+class UpstreamRateLimited(RuntimeError):
+    """Hyperliquid's per-IP rate limit (HTTP 429) held through all retries."""
+
+
+_T = TypeVar("_T")
+_RETRY_DELAYS = (1.0, 2.0, 4.0)
+
+
+def _retry_429(fn: Callable[[], _T]) -> _T:
+    """Run an SDK call, retrying with backoff if Hyperliquid answers HTTP 429.
+
+    A 429 is rejected at Hyperliquid's CDN edge before reaching the exchange,
+    so the action never executed — retrying cannot double-place an order. The
+    usual cause is the dashboard's own polling briefly exhausting the shared
+    per-IP request budget, which frees up within seconds.
+    """
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None)):
+        try:
+            return fn()
+        except ClientError as exc:
+            if exc.status_code != 429:
+                raise
+            if delay is None:
+                raise UpstreamRateLimited(
+                    "Hyperliquid rate limit (HTTP 429): too many requests from this IP. "
+                    "The action was NOT executed — nothing reached the exchange. "
+                    "Wait ~30 seconds and try again."
+                ) from exc
+            logger.warning(
+                "Hyperliquid 429 — retrying in %.0fs (attempt %d/%d)",
+                delay,
+                attempt + 1,
+                len(_RETRY_DELAYS),
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 class HLTrader:
@@ -167,7 +207,7 @@ class HLTrader:
 
     def set_leverage(self, coin: str, leverage: int, is_cross: bool) -> Any:
         exchange = self._get_exchange()
-        return exchange.update_leverage(int(leverage), coin, is_cross)
+        return _retry_429(lambda: exchange.update_leverage(int(leverage), coin, is_cross))
 
     def place_market(
         self,
@@ -179,14 +219,14 @@ class HLTrader:
         slippage: float,
     ) -> dict:
         exchange = self._get_exchange()
-        mark = self._mark_price(exchange, coin)
+        mark = _retry_429(lambda: self._mark_price(exchange, coin))
         size = self._round_size(exchange, coin, notional_usd / mark)
         if size <= 0:
             raise ValueError("Computed order size rounds to 0 — increase the USD amount.")
 
         # Set leverage/margin-mode first, then open at market.
-        leverage_result = exchange.update_leverage(int(leverage), coin, is_cross)
-        order_result = exchange.market_open(coin, is_buy, size, None, slippage)
+        leverage_result = _retry_429(lambda: exchange.update_leverage(int(leverage), coin, is_cross))
+        order_result = _retry_429(lambda: exchange.market_open(coin, is_buy, size, None, slippage))
         return {
             "leverageResult": leverage_result,
             "orderResult": order_result,
@@ -202,16 +242,51 @@ class HLTrader:
             },
         }
 
+    def place_spot_market(
+        self,
+        coin: str,
+        is_buy: bool,
+        notional_usd: float,
+        slippage: float,
+    ) -> dict:
+        """Market buy/sell on a spot pair — you own (or part with) the actual
+        tokens. No leverage or margin mode; the pair name ("HYPE/USDC") is
+        resolved by the SDK to its spot asset id."""
+        exchange = self._get_exchange()
+        mark = _retry_429(lambda: self._mark_price(exchange, coin))
+        raw = notional_usd / mark
+        size = self._round_size(exchange, coin, raw)
+        if not is_buy and size > raw:
+            # Never round a sell UP: "sell everything I hold" must not become
+            # an order for slightly more than the balance (exchange rejects it).
+            asset = exchange.info.name_to_asset(coin)
+            step = 10 ** -exchange.info.asset_to_sz_decimals[asset]
+            size = self._round_size(exchange, coin, size - step)
+        if size <= 0:
+            raise ValueError("Computed order size rounds to 0 — increase the USD amount.")
+        order_result = _retry_429(lambda: exchange.market_open(coin, is_buy, size, None, slippage))
+        return {
+            "orderResult": order_result,
+            "submitted": {
+                "coin": coin,
+                "side": "buy" if is_buy else "sell",
+                "size": size,
+                "markPx": mark,
+                "notionalUsd": size * mark,
+                "slippage": slippage,
+            },
+        }
+
     def close_position(self, coin: str, size: Optional[float] = None) -> Any:
         """Market-close a position. Full close if `size` is None, else a partial
         (reduce-only) close of `size` coin units."""
         exchange = self._get_exchange()
         if size is None:
-            return exchange.market_close(coin)
+            return _retry_429(lambda: exchange.market_close(coin))
         size = self._round_size(exchange, coin, size)
         if size <= 0:
             raise ValueError("Reduce size rounds to 0 — increase the amount.")
-        return exchange.market_close(coin, sz=size)
+        return _retry_429(lambda: exchange.market_close(coin, sz=size))
 
     def _cancel_triggers(self, exchange: Exchange, coin: str) -> int:
         """Cancel existing trigger (TP/SL) orders for `coin` so re-saving auto
@@ -262,13 +337,15 @@ class HLTrader:
             # Aggressive limit beyond the trigger so the market trigger fills.
             raw_limit = tpx * (1 + slippage) if is_buy else tpx * (1 - slippage)
             limit_px = self._round_px(exchange, coin, raw_limit)
-            return exchange.order(
-                coin,
-                is_buy,
-                size,
-                limit_px,
-                order_type={"trigger": {"triggerPx": tpx, "isMarket": True, "tpsl": tpsl}},
-                reduce_only=True,
+            return _retry_429(
+                lambda: exchange.order(
+                    coin,
+                    is_buy,
+                    size,
+                    limit_px,
+                    order_type={"trigger": {"triggerPx": tpx, "isMarket": True, "tpsl": tpsl}},
+                    reduce_only=True,
+                )
             )
 
         if take_profit_px is not None:

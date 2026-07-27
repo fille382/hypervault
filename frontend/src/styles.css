@@ -148,8 +148,8 @@ button {
   text-align: right;
   line-height: 1.15;
 }
-/* Total crypto market cap chip (clickable -> fullscreen chart) */
-.mcap-chip {
+/* BTC price chip (clickable -> fullscreen chart) */
+.btc-chip {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -162,30 +162,30 @@ button {
   cursor: pointer;
   margin-left: 6px;
 }
-.mcap-spark {
+.btc-spark {
   display: block;
   flex-shrink: 0;
 }
-.mcap-chip:hover {
+.btc-chip:hover {
   border-color: var(--green-line);
 }
-.mcap-chip .label {
+.btc-chip .label {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-faint);
 }
-.mcap-chip .val {
+.btc-chip .val {
   font-weight: 600;
   font-size: 13px;
 }
-.mcap-chip .val .pos,
-.mcap-chip .val .neg {
+.btc-chip .val .pos,
+.btc-chip .val .neg {
   font-size: 12px;
 }
 
-/* Fullscreen market-cap chart */
-.mcap-modal {
+/* Fullscreen BTC chart */
+.btc-modal {
   position: fixed;
   inset: 0;
   z-index: 85;
@@ -194,7 +194,7 @@ button {
   display: flex;
   flex-direction: column;
 }
-.mcap-body {
+.btc-body {
   flex: 1;
   min-height: 0;
 }
@@ -304,15 +304,6 @@ button {
     grid-template-columns: 1fr;
   }
 }
-/* Book-focus mode (rest the mouse on the order book): the right sidebar
-   yields its space to the book until the mouse moves away. */
-.layout.book-focus {
-  grid-template-columns: minmax(0, 1fr);
-}
-.layout.book-focus .rail {
-  display: none;
-}
-
 .panel {
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid var(--border);
@@ -677,6 +668,69 @@ button {
   color: var(--text-faint);
   font-size: 12px;
 }
+/* Coin switcher in the chart header: the icon + name drops down a searchable,
+   biggest-first market list. z-index sits above fullscreen charts (z 80). */
+.coin-picker {
+  position: relative;
+  display: inline-flex;
+}
+.coin-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  padding: 3px 6px;
+  margin: -3px -6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.coin-picker-btn:hover {
+  background: var(--row-hover);
+}
+.coin-picker-btn .dd-caret {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.coin-dd-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 89;
+}
+.coin-dd {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 90;
+  width: 340px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 8px;
+}
+.coin-dd .market-search {
+  margin-bottom: 6px;
+}
+.coin-dd-scroll {
+  max-height: 380px;
+  overflow-y: auto;
+}
+.coin-dd .market-row {
+  grid-template-columns: 1fr auto auto;
+}
+.m-dex {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
 /* Our coin-specific link, in the corner where lightweight-charts' own
    attribution logo used to sit (that logo is disabled via attributionLogo). */
 .tv-link {
@@ -847,6 +901,11 @@ button {
   border-color: var(--border);
   background: var(--row);
 }
+/* Marker-style toggle (dots at fill price vs classic arrows) sits at the end */
+.marker-chip.style-toggle {
+  margin-left: auto;
+  color: var(--text-dim);
+}
 
 .chart-wrap {
   position: relative;
@@ -869,21 +928,6 @@ button {
 /* Book collapsed to a slim reopen strip — the chart takes the width. */
 .chart-row.book-hidden {
   grid-template-columns: minmax(0, 1fr) 30px;
-}
-/* Book-focus: wide enough to cover both its old spot and the freed sidebar
-   width, so the pointer that triggered the hover is still over the book
-   after the layout shift (otherwise focus would immediately un-hover). */
-.chart-row.book-focus {
-  grid-template-columns: minmax(0, 1fr) 600px;
-}
-.orderbook.focused {
-  border-left-color: var(--green-line);
-}
-.ob-focus-hint {
-  font-size: 10px;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 .chart-row .chart-panel {
   border-bottom: none; /* the row draws the divider so it spans the book too */
@@ -962,6 +1006,24 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* Price-grouping picker — how wide each ladder level's price bucket is. */
+.ob-group {
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 3px;
+  cursor: pointer;
+}
+.ob-group:hover {
+  color: var(--text);
+}
+.ob-group option {
+  background: var(--bg);
+  color: var(--text);
+}
 .ob-cols {
   display: grid;
   grid-template-columns: 1.2fr 1fr 1fr;
@@ -972,9 +1034,170 @@ button {
   letter-spacing: 0.03em;
   padding: 0 2px 4px;
 }
-.ob-cols span:nth-child(2),
 .ob-cols span:nth-child(3) {
   text-align: right;
+  cursor: help;
+}
+/* Size column header doubles as the coin/USD toggle. */
+.ob-denom {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  text-align: right;
+  cursor: pointer;
+  white-space: nowrap; /* keep the ⇄ on the same line as the label */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ob-denom:hover {
+  color: var(--text);
+}
+/* "Sellers · asks" / "Buyers · bids" — names the two halves of the ladder. */
+.ob-side-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 1px 2px;
+  cursor: help;
+}
+.ob-side-label.sell {
+  color: var(--red);
+  opacity: 0.75;
+}
+.ob-side-label.buy {
+  color: var(--green);
+  opacity: 0.75;
+}
+/* Buy-vs-sell depth balance under the ladder. */
+.ob-pressure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 10px;
+  cursor: help;
+}
+.ob-pressure-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--red-dim);
+  overflow: hidden;
+}
+.ob-pressure-fill {
+  height: 100%;
+  border-radius: 2px 0 0 2px;
+  background: var(--green);
+  opacity: 0.7;
+  transition: width 0.6s ease;
+}
+/* ── Market pulse — quiet feed of significant tape/wall events ─────────── */
+.ob-pulse {
+  margin-top: 8px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 5px;
+}
+.ob-pulse-head {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  cursor: help;
+  padding-bottom: 3px;
+}
+.ob-pulse-empty {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 2px 0;
+}
+/* Net taker flow (buys − sells, $) — green rising, red falling. */
+.ob-flow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  cursor: help;
+  padding-bottom: 4px;
+}
+.ob-flow-label {
+  color: var(--text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* The headline number of the panel's bottom half — sized like the mid price
+   so the eye catches it without hunting. */
+.ob-flow-val {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+  transition: color 0.35s ease; /* soft green↔red flip when crossing zero */
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-flow-val {
+    transition: none;
+  }
+}
+.ob-flow-win {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.ob-pulse-row {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.55;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: help;
+  animation: pulse-in 1.2s ease-out;
+}
+/* Older events fade so the eye lands on the newest. */
+.ob-pulse-row:nth-child(3) {
+  opacity: 0.75;
+}
+.ob-pulse-row:nth-child(4) {
+  opacity: 0.55;
+}
+.ob-pulse-row:nth-child(5) {
+  opacity: 0.4;
+}
+.pulse-tag {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pulse-text {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pulse-age {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+@keyframes pulse-in {
+  0% {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ob-pulse-row {
+    animation: none;
+  }
 }
 .ob-side {
   display: flex;
@@ -1020,7 +1243,9 @@ button {
   text-align: right;
   color: var(--text-dim);
 }
-/* One-shot pulse when a level's size changes — green grew, red shrank. */
+/* One-shot pulse when a level's size changes — green grew, red shrank.
+   Kept shorter and dimmer than the poll interval so back-to-back changes read
+   as ticks, not a constant glow. */
 .ob-sz {
   border-radius: 3px;
   padding: 0 3px;
@@ -1028,7 +1253,7 @@ button {
 }
 @keyframes ob-flash-up {
   0% {
-    background: rgba(52, 226, 168, 0.3);
+    background: rgba(52, 226, 168, 0.22);
     color: var(--text);
   }
   100% {
@@ -1037,7 +1262,7 @@ button {
 }
 @keyframes ob-flash-down {
   0% {
-    background: rgba(255, 93, 115, 0.3);
+    background: rgba(255, 93, 115, 0.22);
     color: var(--text);
   }
   100% {
@@ -1045,14 +1270,15 @@ button {
   }
 }
 .ob-sz.flash-up {
-  animation: ob-flash-up 0.9s ease-out;
+  animation: ob-flash-up 0.35s ease-out;
 }
 .ob-sz.flash-down {
-  animation: ob-flash-down 0.9s ease-out;
+  animation: ob-flash-down 0.35s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {
   .ob-bar,
-  .ob-mid-px {
+  .ob-mid-px,
+  .ob-pressure-fill {
     transition: none;
   }
   .ob-sz.flash-up,
@@ -1382,6 +1608,10 @@ button {
 }
 .card-head h3 {
   margin: 0;
+}
+.card-head .mirror-btn {
+  padding: 5px 9px;
+  font-size: 11px;
 }
 .acct-sub {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -1850,12 +2080,20 @@ button {
 }
 
 /* ── Toast ───────────────────────────────────────────────────────────── */
-.toast {
+/* Toasts queue into a bottom-center stack — newest at the bottom, up to
+   three at once; the rest wait their turn (see the toast queue in App.jsx). */
+.toast-stack {
   position: fixed;
   bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.toast {
   padding: 12px 18px;
   border-radius: 10px;
   border: 1px solid var(--border);
@@ -1863,6 +2101,23 @@ button {
   box-shadow: var(--shadow);
   font-size: 13px;
   max-width: 80vw;
+  cursor: pointer;
+  animation: toast-in 0.25s ease-out;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 .toast.ok {
   border-color: var(--green-line);
@@ -1957,6 +2212,27 @@ button {
 }
 .act-sell {
   color: var(--red);
+}
+/* Fired price-alert notices, inline with your fills. */
+.act-alert {
+  color: var(--amber);
+}
+.act-dismiss {
+  margin-left: auto;
+  align-self: center;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.act-dismiss:hover {
+  color: var(--red);
+  background: var(--red-dim);
 }
 .activity-window {
   font-size: 11px;

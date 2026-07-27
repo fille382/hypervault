@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import time
+from collections import deque
 from typing import Any, Optional
 
 import websockets
@@ -22,6 +23,8 @@ logger = logging.getLogger("hypervault.ws")
 
 PING_INTERVAL = 30.0  # Hyperliquid closes connections that go quiet (~60s)
 BOOK_IDLE_TTL = 90.0  # drop a coin's l2Book sub this long after the last request
+TRADES_IDLE_TTL = 90.0  # same idea for a coin's public-trades stream
+TRADES_BUFFER = 1500  # trades kept per coin (enough for size statistics)
 RECONNECT_MAX = 30.0  # backoff ceiling between reconnect attempts
 
 
@@ -59,6 +62,29 @@ def parse_book(data: dict) -> Optional[dict]:
     }
 
 
+def parse_trades(data: list) -> list[dict]:
+    """trades payload -> [{coin, px, sz, time, side}], side = taker direction."""
+    out = []
+    for t in data or []:
+        if not isinstance(t, dict):
+            continue
+        px, sz, ts = _f(t.get("px")), _f(t.get("sz")), t.get("time")
+        if px is None or sz is None or not isinstance(ts, (int, float)):
+            continue
+        out.append(
+            {
+                "coin": t.get("coin"),
+                "px": px,
+                "sz": sz,
+                "time": int(ts),
+                # Hyperliquid: "B" = the taker bought (lifted an ask),
+                # "A" = the taker sold (hit a bid).
+                "side": "buy" if t.get("side") == "B" else "sell",
+            }
+        )
+    return out
+
+
 class HLWebSocketFeed:
     def __init__(self, base_url: str) -> None:
         self._url = (
@@ -70,7 +96,11 @@ class HLWebSocketFeed:
         self._mids: dict[str, str] = {}
         self._mids_ts: float = 0.0
         self._books: dict[str, dict] = {}  # coin -> parsed book (with local "ts")
-        self._book_wanted: dict[str, float] = {}  # coin -> last time a caller asked
+        # coin -> {"ts", "sig", "mantissa"}: last request time and the price
+        # grouping (Hyperliquid's nSigFigs/mantissa) the subscription uses.
+        self._book_wanted: dict[str, dict] = {}
+        self._trades: dict[str, deque] = {}  # coin -> recent public trades
+        self._trades_wanted: dict[str, float] = {}  # coin -> last request time
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -95,23 +125,61 @@ class HLWebSocketFeed:
             return self._mids
         return None
 
-    def book(self, coin: str, max_age: float = 15.0) -> Optional[dict]:
-        """Latest order book for `coin`, or None if we don't have a fresh one."""
+    def book(
+        self,
+        coin: str,
+        sig: Optional[int] = None,
+        mantissa: Optional[int] = None,
+        max_age: float = 15.0,
+    ) -> Optional[dict]:
+        """Latest book for `coin` at this grouping, or None if stale/mismatched."""
         b = self._books.get(coin)
-        if b and time.time() - b["ts"] <= max_age:
+        if (
+            b
+            and time.time() - b["ts"] <= max_age
+            and b.get("sig") == sig
+            and b.get("mantissa") == mantissa
+        ):
             return b
         return None
 
-    async def ensure_book(self, coin: str) -> None:
-        """Mark `coin`'s book as wanted; subscribe now if we're connected.
+    async def ensure_book(
+        self, coin: str, sig: Optional[int] = None, mantissa: Optional[int] = None
+    ) -> None:
+        """Mark `coin`'s book as wanted at this price grouping.
 
-        Safe to call on every request — it only sends a subscribe message the
-        first time (or after an idle unsubscribe / reconnect).
+        Safe to call on every request — it only talks to Hyperliquid the first
+        time (or after an idle unsubscribe / reconnect). One subscription per
+        coin: asking for a different grouping swaps the subscription, so the
+        most recently requested grouping wins.
         """
-        already = coin in self._book_wanted
-        self._book_wanted[coin] = time.time()
-        if not already and self._ws is not None:
-            await self._send_subscription("subscribe", coin)
+        want = self._book_wanted.get(coin)
+        if want and want["sig"] == sig and want["mantissa"] == mantissa:
+            want["ts"] = time.time()
+            return
+        if want and self._ws is not None:
+            await self._send_subscription("unsubscribe", coin, want["sig"], want["mantissa"])
+        self._book_wanted[coin] = {"ts": time.time(), "sig": sig, "mantissa": mantissa}
+        self._books.pop(coin, None)  # any cached snapshot is at the old grouping
+        if self._ws is not None:
+            await self._send_subscription("subscribe", coin, sig, mantissa)
+
+    def trades(self, coin: str, since_ms: int = 0) -> list[dict]:
+        """Buffered public trades for `coin` newer than `since_ms`, oldest first."""
+        buf = self._trades.get(coin)
+        if not buf:
+            return []
+        rows = list(buf)
+        return [t for t in rows if t["time"] > since_ms] if since_ms > 0 else rows
+
+    async def ensure_trades(self, coin: str) -> None:
+        """Mark `coin`'s public-trades stream as wanted (subscribes on first ask)."""
+        known = coin in self._trades_wanted
+        self._trades_wanted[coin] = time.time()
+        if not known and self._ws is not None:
+            await self._send(
+                {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}}
+            )
 
     # ── internals ─────────────────────────────────────────────────────────
     async def _send(self, payload: dict) -> None:
@@ -123,8 +191,17 @@ class HLWebSocketFeed:
         except Exception:  # noqa: BLE001 — connection died; the run loop reconnects
             pass
 
-    async def _send_subscription(self, method: str, coin: str) -> None:
-        await self._send({"method": method, "subscription": {"type": "l2Book", "coin": coin}})
+    async def _send_subscription(
+        self, method: str, coin: str, sig: Optional[int] = None, mantissa: Optional[int] = None
+    ) -> None:
+        # nSigFigs 2-5 groups levels into coarser price buckets upstream;
+        # mantissa (2 or 5, only with nSigFigs=5) picks the in-between steps.
+        sub: dict[str, Any] = {"type": "l2Book", "coin": coin}
+        if sig:
+            sub["nSigFigs"] = sig
+            if mantissa and sig == 5:
+                sub["mantissa"] = mantissa
+        await self._send({"method": method, "subscription": sub})
 
     async def _run(self) -> None:
         backoff = 1.0
@@ -135,8 +212,12 @@ class HLWebSocketFeed:
                     backoff = 1.0
                     logger.info("hyperliquid ws connected (%s)", self._url)
                     await self._send({"method": "subscribe", "subscription": {"type": "allMids"}})
-                    for coin in list(self._book_wanted):
-                        await self._send_subscription("subscribe", coin)
+                    for coin, want in list(self._book_wanted.items()):
+                        await self._send_subscription("subscribe", coin, want["sig"], want["mantissa"])
+                    for coin in list(self._trades_wanted):
+                        await self._send(
+                            {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}}
+                        )
                     keeper = asyncio.create_task(self._keepalive())
                     try:
                         async for raw in ws:
@@ -160,11 +241,18 @@ class HLWebSocketFeed:
             await asyncio.sleep(PING_INTERVAL)
             await self._send({"method": "ping"})
             now = time.time()
-            for coin, last in list(self._book_wanted.items()):
-                if now - last > BOOK_IDLE_TTL:
+            for coin, want in list(self._book_wanted.items()):
+                if now - want["ts"] > BOOK_IDLE_TTL:
                     del self._book_wanted[coin]
                     self._books.pop(coin, None)
-                    await self._send_subscription("unsubscribe", coin)
+                    await self._send_subscription("unsubscribe", coin, want["sig"], want["mantissa"])
+            for coin, ts in list(self._trades_wanted.items()):
+                if now - ts > TRADES_IDLE_TTL:
+                    del self._trades_wanted[coin]
+                    self._trades.pop(coin, None)
+                    await self._send(
+                        {"method": "unsubscribe", "subscription": {"type": "trades", "coin": coin}}
+                    )
 
     def _handle(self, raw: str | bytes) -> None:
         try:
@@ -182,4 +270,20 @@ class HLWebSocketFeed:
             book = parse_book(data or {})
             if book and book.get("coin"):
                 book["ts"] = time.time()
+                # The payload doesn't echo nSigFigs/mantissa, so stamp the book
+                # with the grouping we currently want for this coin. A message
+                # from a just-swapped subscription may get mis-stamped for one
+                # tick; the next push (at the new grouping) overwrites it.
+                want = self._book_wanted.get(book["coin"])
+                book["sig"] = want["sig"] if want else None
+                book["mantissa"] = want["mantissa"] if want else None
                 self._books[book["coin"]] = book
+        elif channel == "trades":
+            for t in parse_trades(data if isinstance(data, list) else []):
+                coin = t.get("coin")
+                if not coin:
+                    continue
+                buf = self._trades.get(coin)
+                if buf is None:
+                    buf = self._trades[coin] = deque(maxlen=TRADES_BUFFER)
+                buf.append(t)

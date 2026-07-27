@@ -18,9 +18,12 @@ export default function MarketList({ meta, selectedCoin, onSelectCoin, onTradeCo
         continue
       }
       const chg = m.markPx && m.prevDayPx ? (m.markPx - m.prevDayPx) / m.prevDayPx : null
-      ;(byDex[m.dex || ''] ||= []).push({ coin, label, markPx: m.markPx, chg })
+      const size = m.oiUsd ?? m.dayNtlVlm ?? 0
+      ;(byDex[m.dex || ''] ||= []).push({ coin, label, markPx: m.markPx, chg, size })
     }
-    for (const d in byDex) byDex[d].sort((a, b) => a.label.localeCompare(b.label))
+    // Biggest markets first (open-interest notional — HL's closest market-cap
+    // proxy), so BTC/ETH/SOL sit at the top instead of alphabetical noise.
+    for (const d in byDex) byDex[d].sort((a, b) => b.size - a.size || a.label.localeCompare(b.label))
     return Object.entries(byDex).sort(([a], [b]) =>
       a === '' ? -1 : b === '' ? 1 : a.localeCompare(b),
     )

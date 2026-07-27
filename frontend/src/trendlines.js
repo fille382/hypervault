@@ -37,4 +37,9 @@ export const TREND_OPTS = {
   priceLineVisible: false,
   lastValueVisible: false,
   crosshairMarkerVisible: false,
+  // Keep trendlines OUT of the price axis' auto-scale. Without this, a steep
+  // line's anchors are counted when the axis re-fits (e.g. the moment a drawing
+  // completes and auto-scale is re-enabled), so the whole chart suddenly
+  // rescales to fit the line — candles squash into a sliver mid-screen.
+  autoscaleInfoProvider: () => null,
 }

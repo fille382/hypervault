@@ -10,11 +10,11 @@ import {
   getAccount,
   getPeers,
   getFills,
-  getMcap,
   getMyTrades,
   setArm,
 } from './api.js'
 import { fmtNum, fmtPrice, shortAddr, coinLabel } from './format.js'
+import { checkAlerts, noticeText } from './alerts.js'
 
 const DEFAULT_VAULT = '0xd6e56265890b76413d1d527eb9b75e334c0c5b42'
 // Live-data poll cadence scales with the chart timeframe: fast when you're
@@ -34,6 +34,14 @@ const pollMsFor = (tf) => POLL_BY_TIMEFRAME[tf] || 10000
 // Your own positions update at this fixed rate regardless of the chart timeframe.
 const ACCOUNT_POLL_MS = 4000
 const SAVED_KEY = 'hypervault.savedVaults'
+// Toast queue: how long each toast lives, how many stack on screen at once,
+// and how many more may wait their turn before the oldest waiter is dropped.
+const TOAST_MS = 4200
+const TOAST_VISIBLE = 3
+const TOAST_PENDING_MAX = 5
+// Vault-activity fills each get their own toast, up to this many per poll;
+// anything beyond that collapses into one "…and N more" summary toast.
+const FILL_TOASTS_MAX = 4
 
 function loadSavedVaults() {
   try {
@@ -85,22 +93,48 @@ export default function App() {
   const [vaultError, setVaultError] = useState(null)
   const [account, setAccount] = useState(null)
   const [trade, setTrade] = useState(null) // prefill object | null
-  const [toast, setToast] = useState(null)
+  const [toasts, setToasts] = useState([])
   const [selectedCoin, setSelectedCoin] = useState(null)
   const [savedVaults, setSavedVaults] = useState(loadSavedVaults)
   const [online, setOnline] = useState(true) // is the backend reachable?
-  // Book-focus mode: a long hover on the order book expands it into the
-  // right sidebar's space (the sidebar hides until the mouse moves away).
-  const [bookFocus, setBookFocus] = useState(false)
   // Chart timeframe drives how often we poll live data (see POLL_BY_TIMEFRAME).
   const [chartTf, setChartTf] = useState('3d')
   const pollMs = pollMsFor(chartTf)
 
-  const toastTimer = useRef(null)
-  const showToast = useCallback((kind, msg) => {
-    setToast({ kind, msg })
-    clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(null), 4200)
+  // Queued toasts: up to TOAST_VISIBLE show stacked, each for its full
+  // TOAST_MS; anything beyond that waits in a small pending queue instead of
+  // overwriting what's on screen. When the queue overflows, the oldest
+  // *waiting* toast drops (stale news loses to fresh news). Click dismisses.
+  const toastQ = useRef({ visible: [], pending: [], timers: new Map(), id: 0 })
+  const dismissToast = useCallback((id) => {
+    const q = toastQ.current
+    clearTimeout(q.timers.get(id))
+    q.timers.delete(id)
+    q.visible = q.visible.filter((t) => t.id !== id)
+    const next = q.pending.shift()
+    if (next) {
+      q.visible = [...q.visible, next]
+      q.timers.set(next.id, setTimeout(() => dismissToast(next.id), TOAST_MS))
+    }
+    setToasts(q.visible)
+  }, [])
+  const showToast = useCallback(
+    (kind, msg) => {
+      const q = toastQ.current
+      const t = { id: ++q.id, kind, msg }
+      if (q.visible.length < TOAST_VISIBLE) {
+        q.visible = [...q.visible, t]
+        q.timers.set(t.id, setTimeout(() => dismissToast(t.id), TOAST_MS))
+        setToasts(q.visible)
+      } else {
+        q.pending = [...q.pending, t].slice(-TOAST_PENDING_MAX)
+      }
+    },
+    [dismissToast],
+  )
+  useEffect(() => {
+    const q = toastQ.current
+    return () => q.timers.forEach((timer) => clearTimeout(timer))
   }, [])
 
   // Activity feed: real trade history (userFills) for every saved vault,
@@ -152,15 +186,27 @@ export default function App() {
     return () => clearInterval(id)
   }, [visible])
 
-  // Total crypto market cap for the top bar (backend caches upstream).
-  const [mcap, setMcap] = useState(null)
+  // Chart-drawn price alerts AND trendlines, checked against every fresh
+  // mark-price sweep (the meta poll covers all coins). Fired notices toast
+  // here and persist into the Trade history feed (see alerts.js).
   useEffect(() => {
-    if (!visible) return undefined
-    const load = () => getMcap().then(setMcap).catch(() => {})
-    load()
-    const id = setInterval(load, 120000)
-    return () => clearInterval(id)
-  }, [visible])
+    if (!meta || !Object.keys(meta).length) return
+    for (const n of checkAlerts(meta)) {
+      const landed = n.kind === 'hit' || n.kind === 'line-cross'
+      showToast(landed ? 'ok' : 'info', `🔔 ${noticeText(n)}`)
+    }
+  }, [meta, showToast])
+
+  // BTC price + 24h change for the top-bar chip, straight from the meta poll
+  // (Hyperliquid markPx / prevDayPx) — no extra upstream requests.
+  const btc = useMemo(() => {
+    const m = meta?.BTC
+    if (!m?.markPx) return null
+    return {
+      price: m.markPx,
+      change24h: m.prevDayPx ? (m.markPx / m.prevDayPx - 1) * 100 : null,
+    }
+  }, [meta])
 
   // Health + the FOLLOWED vault — polled at the timeframe-scaled cadence.
   const refresh = useCallback(async () => {
@@ -310,15 +356,19 @@ export default function App() {
           const prev = seenFillsRef.current
           seenFillsRef.current = keys
           if (!prev) return // first load is history, not breaking news
+          // One toast per new fill, oldest first so they queue in trade order.
+          // The toast queue paces the display; if a poll brings a real flood,
+          // everything past the first few is summarized in a single closer.
           const fresh = list.filter((f) => !prev.has(fillKey(f)))
-          if (fresh.length) {
-            const f = fresh[0]
+          const shown = fresh.slice(0, FILL_TOASTS_MAX)
+          for (const f of shown.reverse()) {
             showToast(
               'info',
-              `${f.vault} ${f.dir || (f.side === 'buy' ? 'Buy' : 'Sell')} ${fmtNum(f.sz)} ${coinLabel(f.coin)} @ ${fmtPrice(f.px)}${
-                fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ''
-              }`,
+              `${f.vault} ${f.dir || (f.side === 'buy' ? 'Buy' : 'Sell')} ${fmtNum(f.sz)} ${coinLabel(f.coin)} @ ${fmtPrice(f.px)}`,
             )
+          }
+          if (fresh.length > FILL_TOASTS_MAX) {
+            showToast('info', `…and ${fresh.length - FILL_TOASTS_MAX} more trades in the activity feed`)
           }
         })
         .catch(() => {})
@@ -432,17 +482,15 @@ export default function App() {
       <TopBar
         health={health}
         account={account}
-        mcap={mcap}
+        btc={btc}
         online={online}
         onToggleArm={onToggleArm}
         onNewTrade={openNewTrade}
         notify={showToast}
         refresh={refreshAll}
       />
-      <div className={`layout${bookFocus ? ' book-focus' : ''}`}>
+      <div className="layout">
         <VaultPanel
-          bookFocus={bookFocus}
-          onBookFocus={setBookFocus}
           vault={vault}
           vaultError={vaultError}
           meta={meta}
@@ -461,6 +509,7 @@ export default function App() {
           fills={fills}
           myFills={myTrades}
           onTimeframe={setChartTf}
+          notify={showToast}
         />
         <AccountPanel
           health={health}
@@ -471,6 +520,7 @@ export default function App() {
           selectedCoin={selectedCoin}
           onSelectCoin={setSelectedCoin}
           onAddExposure={openAddExposure}
+          onNewTrade={openNewTrade}
           onLoadMoreFills={loadMoreFills}
           fillsMaxed={fillsLimit >= FILLS_LIMIT_MAX}
         />
@@ -480,6 +530,7 @@ export default function App() {
           initial={trade}
           meta={meta}
           health={health}
+          account={account}
           onClose={() => setTrade(null)}
           onResult={(kind, msg) => {
             showToast(kind, msg)
@@ -487,7 +538,20 @@ export default function App() {
           }}
         />
       )}
-      {toast && <div className={`toast ${toast.kind}`}>{toast.msg}</div>}
+      {toasts.length > 0 && (
+        <div className="toast-stack">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`toast ${t.kind}`}
+              onClick={() => dismissToast(t.id)}
+              title="Click to dismiss"
+            >
+              {t.msg}
+            </div>
+          ))}
+        </div>
+      )}
     </>
   )
 }

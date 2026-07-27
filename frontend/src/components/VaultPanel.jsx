@@ -28,8 +28,7 @@ export default function VaultPanel({
   fills = [],
   myFills = [],
   onTimeframe,
-  bookFocus = false,
-  onBookFocus,
+  notify,
 }) {
   const [editing, setEditing] = useState(false)
   const [ddOpen, setDdOpen] = useState(false)
@@ -59,9 +58,7 @@ export default function VaultPanel({
     <section className="panel">
       {/* Chart first — it's what you're here to look at. The vault header
           sits below, right above the positions it describes. */}
-      <div
-        className={`chart-row${bookOpen ? '' : ' book-hidden'}${bookFocus ? ' book-focus' : ''}`}
-      >
+      <div className={`chart-row${bookOpen ? '' : ' book-hidden'}`}>
         <ChartPanel
           coin={selectedCoin}
           position={selectedPosition}
@@ -71,13 +68,14 @@ export default function VaultPanel({
           myFills={myFills}
           onTimeframe={onTimeframe}
           onSelectVault={onSubmitAddress}
+          meta={meta}
+          onSelectCoin={onSelectCoin}
         />
         <OrderBookPanel
           coin={selectedCoin}
           collapsed={!bookOpen}
           onToggle={toggleBook}
-          focused={bookFocus}
-          onFocus={onBookFocus}
+          notify={notify}
         />
       </div>
 

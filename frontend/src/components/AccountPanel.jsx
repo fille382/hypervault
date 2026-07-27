@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fmtSignedUsd, fmtNum, fmtPct, fmtPrice, coinLabel } from '../format.js'
+import { fmtSignedUsd, fmtUsd, fmtUsdCompact, fmtNum, fmtPct, fmtPrice, coinLabel } from '../format.js'
 import { closePosition } from '../api.js'
 import CoinIcon from './CoinIcon.jsx'
 import ReduceModal from './ReduceModal.jsx'
@@ -26,6 +26,7 @@ export default function AccountPanel({
   selectedCoin,
   onSelectCoin,
   onAddExposure,
+  onNewTrade,
   onLoadMoreFills,
   fillsMaxed,
 }) {
@@ -55,7 +56,14 @@ export default function AccountPanel({
     <aside className="rail">
       {configured && (
         <section className="panel card">
-          <h3>My positions</h3>
+          <div className="card-head">
+            <h3>My positions</h3>
+            {onNewTrade && (
+              <button className="mirror-btn" onClick={() => onNewTrade()}>
+                + New trade
+              </button>
+            )}
+          </div>
           {positions.length === 0 ? (
             <div className="empty">No open positions yet. Mirror one from the vault →</div>
           ) : (
@@ -80,7 +88,13 @@ export default function AccountPanel({
                         </span>
                       </div>
                       <div className="mp-sub num">
-                        {fmtNum(p.size)} ·{' '}
+                        <span title={p.positionValue != null ? fmtUsd(p.positionValue) : undefined}>
+                          {fmtNum(p.size)}
+                          {p.positionValue != null && (
+                            <span className="faint"> ({fmtUsdCompact(p.positionValue)})</span>
+                          )}
+                        </span>{' '}
+                        ·{' '}
                         <span className={pnlPos ? 'pos' : 'neg'}>
                           {fmtSignedUsd(p.unrealizedPnl)} ({fmtPct(p.roe)})
                         </span>
