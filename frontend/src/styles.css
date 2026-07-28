@@ -1607,6 +1607,28 @@ button {
   color: var(--green);
   font-size: 12px;
 }
+.setup-hint a {
+  color: var(--green);
+  text-decoration: underline;
+}
+.setup-steps {
+  margin: 8px 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 5px;
+}
+.label-link {
+  color: var(--green);
+  text-decoration: underline;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.45;
+  margin-top: 6px;
+}
 
 .card-head {
   display: flex;

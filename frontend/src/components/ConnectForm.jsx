@@ -32,19 +32,44 @@ export default function ConnectForm({ network, onConnected, onError }) {
   return (
     <div className="connect">
       <div className="setup-hint" style={{ borderStyle: 'solid' }}>
-        Connect to trade on <b>{network || 'mainnet'}</b>. Use a Hyperliquid <b>API wallet</b>{' '}
-        key (can trade, <b>can’t withdraw</b>). It’s stored locally on this machine and only used
-        to sign your orders — it never leaves your computer.
+        <b>You need a Hyperliquid API wallet</b> — a separate trading key that{' '}
+        <b>can’t withdraw</b> your funds. Takes a minute:
+        <ol className="setup-steps">
+          <li>
+            Open{' '}
+            <a href="https://app.hyperliquid.xyz/API" target="_blank" rel="noreferrer">
+              app.hyperliquid.xyz/API
+            </a>{' '}
+            and connect your normal wallet.
+          </li>
+          <li>
+            Name a new API wallet (e.g. “hypervault”), click <b>Generate</b>, then{' '}
+            <b>Authorize API Wallet</b>.
+          </li>
+          <li>Copy the private key it shows (only shown once) and paste it below.</li>
+        </ol>
+        The key is sent only to the backend on <b>this computer</b> and used to sign your{' '}
+        {network || 'mainnet'} orders — it never leaves your machine.
       </div>
 
       <div className="field">
-        <div className="label">API wallet private key</div>
+        <div className="label">
+          <span>API wallet private key</span>
+          <a
+            className="label-link"
+            href="https://app.hyperliquid.xyz/API"
+            target="_blank"
+            rel="noreferrer"
+          >
+            where do I get this?
+          </a>
+        </div>
         <input
           className="input num"
           type="password"
           autoComplete="off"
           spellCheck={false}
-          placeholder="0x…"
+          placeholder="0x… (the key from the API page, not your seed phrase)"
           value={secretKey}
           onChange={(e) => setSecretKey(e.target.value)}
           onKeyDown={(e) => {
@@ -56,19 +81,24 @@ export default function ConnectForm({ network, onConnected, onError }) {
       <div className="field">
         <div className="label">
           <span>Main account address</span>
-          <span>optional</span>
+          <span>required with an API wallet</span>
         </div>
         <input
           className="input num"
           autoComplete="off"
           spellCheck={false}
-          placeholder="0x… (blank if using your main wallet key)"
+          placeholder="0x… the account that holds your funds"
           value={accountAddress}
           onChange={(e) => setAccountAddress(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit()
           }}
         />
+        <div className="field-hint">
+          Your Ethereum address — the MetaMask (or other) wallet you connect to Hyperliquid
+          with. It’s the <b>public</b> 0x… address shown top-right on Hyperliquid. Leave blank
+          only if you pasted that wallet’s own private key above.
+        </div>
       </div>
 
       <label className="remember">
