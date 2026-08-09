@@ -2626,6 +2626,12 @@ select.lb-mineq:hover {
   padding: 30px;
   text-align: center;
 }
+.stale-note {
+  color: var(--amber);
+  font-size: 12px;
+  padding: 6px 0;
+  text-align: center;
+}
 .linkish {
   color: var(--green);
   background: none;
