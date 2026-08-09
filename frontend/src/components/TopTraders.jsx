@@ -31,6 +31,16 @@ const MIN_EQUITY = [
   { value: 1_000_000, label: '≥ $1M' },
 ]
 
+// Deterministic per-address gradient — gives each row a visual anchor so the
+// list is scannable without reading hex.
+function addrGradient(addr) {
+  let h = 0
+  for (let i = 2; i < addr.length; i++) h = (h * 31 + addr.charCodeAt(i)) >>> 0
+  const h1 = h % 360
+  const h2 = (h1 + 40 + ((h >> 9) % 140)) % 360
+  return `linear-gradient(135deg, hsl(${h1} 72% 52%), hsl(${h2} 72% 36%))`
+}
+
 function Sparkline({ points }) {
   // points: [[ms, pnl], ...] — index-spaced x (points are ~evenly timed).
   if (!points || points.length < 2) return null
@@ -56,7 +66,7 @@ function Sparkline({ points }) {
   )
 }
 
-function ProfileRow({ address, window: win, profile }) {
+function ProfileRow({ address, window: win, winLabel, vlm, equity, profile }) {
   if (profile === 'loading') return <div className="lb-profile spin">Loading trader stats…</div>
   if (!profile || profile === 'error')
     return <div className="lb-profile faint">Couldn’t load stats for this trader.</div>
@@ -65,6 +75,11 @@ function ProfileRow({ address, window: win, profile }) {
   return (
     <div className="lb-profile">
       <div className="lb-profile-stats num">
+        {equity != null && (
+          <span className="lb-eq-stat" title={fmtUsd(equity)}>
+            <b>{fmtUsdCompact(equity)}</b> equity
+          </span>
+        )}
         <span
           title={
             s?.winRateBasis === 'closes'
@@ -81,6 +96,11 @@ function ProfileRow({ address, window: win, profile }) {
         <span>
           <b>{s?.avgHoldMs != null ? fmtDuration(s.avgHoldMs) : '—'}</b> avg hold
         </span>
+        {vlm != null && (
+          <span title={fmtUsd(vlm)}>
+            <b>{fmtUsdCompact(vlm)}</b> volume ({winLabel})
+          </span>
+        )}
         {profile.isVault && <span className="lb-vault-tag">Vault{profile.vaultName ? ` · ${profile.vaultName}` : ''}</span>}
       </div>
       {s?.topCoins?.length > 0 && (
@@ -172,6 +192,33 @@ export default function TopTraders({
     return mins < 1 ? 'just now' : `${mins}m ago`
   }, [meta, now])
 
+  const winLabel = WINDOWS.find((w) => w.key === win)?.label
+  const sortLabel = SORTS.find((s) => s.key === sort)?.label
+  // One metric column instead of three: it leads with whatever the list is
+  // ranked by, with the complementary stat underneath — nothing overflows.
+  const metricFor = (t) => {
+    if (sort === 'roi')
+      return {
+        main: fmtPct(t.roi),
+        cls: t.roi == null ? '' : t.roi >= 0 ? 'pos' : 'neg',
+        sub: `${fmtUsdCompact(t.pnl, true)} PnL`,
+        title: `PnL ${fmtUsd(t.pnl)}`,
+      }
+    if (sort === 'vlm')
+      return {
+        main: fmtUsdCompact(t.vlm),
+        cls: '',
+        sub: `${fmtUsdCompact(t.pnl, true)} PnL`,
+        title: `Volume ${fmtUsd(t.vlm)} · PnL ${fmtUsd(t.pnl)}`,
+      }
+    return {
+      main: fmtUsdCompact(t.pnl, true),
+      cls: t.pnl >= 0 ? 'pos' : 'neg',
+      sub: t.roi == null ? null : `${fmtPct(t.roi)} ROI`,
+      title: `PnL ${fmtUsd(t.pnl)}`,
+    }
+  }
+
   return (
     <div
       className="overlay"
@@ -234,11 +281,11 @@ export default function TopTraders({
         <div className="lb-scroll">
           <div className="lb-table-head num">
             <span className="lb-c-rank">#</span>
-            <span className="lb-c-trader">Trader</span>
-            <span className="lb-c-num">Equity</span>
-            <span className="lb-c-num">PnL ({WINDOWS.find((w) => w.key === win)?.label})</span>
-            <span className="lb-c-num">ROI ({WINDOWS.find((w) => w.key === win)?.label})</span>
-            <span className="lb-c-num">Volume ({WINDOWS.find((w) => w.key === win)?.label})</span>
+            <span>Trader</span>
+            <span className="lb-c-num lb-c-eq">Equity</span>
+            <span className="lb-c-num">
+              {sortLabel} ({winLabel})
+            </span>
             <span className="lb-c-act" />
           </div>
 
@@ -258,6 +305,7 @@ export default function TopTraders({
             rows.map((t) => {
               const isFollowed = followed.has(t.address.toLowerCase())
               const isActive = activeAddress && t.address.toLowerCase() === activeAddress.toLowerCase()
+              const m = metricFor(t)
               return (
                 <div key={t.address}>
                   <div
@@ -273,25 +321,26 @@ export default function TopTraders({
                       }
                     }}
                   >
-                    <span className="lb-c-rank faint">{t.rank}</span>
-                    <span className="lb-c-trader">
-                      <span className="lb-name">{t.name || shortAddr(t.address)}</span>
-                      {t.name && <span className="lb-addr">{shortAddr(t.address)}</span>}
+                    <span className="lb-c-rank">
+                      {t.rank <= 3 ? (
+                        <span className={`lb-medal m${t.rank}`}>{t.rank}</span>
+                      ) : (
+                        <span className="faint">{t.rank}</span>
+                      )}
                     </span>
-                    <span className="lb-c-num" title={fmtUsd(t.accountValue)}>
+                    <span className="lb-c-trader">
+                      <span className="lb-avatar" style={{ background: addrGradient(t.address) }} />
+                      <span className="lb-id">
+                        <span className="lb-name">{t.name || shortAddr(t.address)}</span>
+                        {t.name && <span className="lb-addr">{shortAddr(t.address)}</span>}
+                      </span>
+                    </span>
+                    <span className="lb-c-num lb-c-eq dim" title={fmtUsd(t.accountValue)}>
                       {fmtUsdCompact(t.accountValue)}
                     </span>
-                    <span
-                      className={`lb-c-num ${t.pnl >= 0 ? 'pos' : 'neg'}`}
-                      title={fmtUsd(t.pnl)}
-                    >
-                      {fmtUsdCompact(t.pnl, true)}
-                    </span>
-                    <span className={`lb-c-num ${t.roi == null ? '' : t.roi >= 0 ? 'pos' : 'neg'}`}>
-                      {fmtPct(t.roi)}
-                    </span>
-                    <span className="lb-c-num" title={fmtUsd(t.vlm)}>
-                      {fmtUsdCompact(t.vlm)}
+                    <span className="lb-c-num lb-c-metric" title={m.title}>
+                      <span className={`lb-metric-main ${m.cls}`}>{m.main}</span>
+                      {m.sub && <span className="lb-metric-sub">{m.sub}</span>}
                     </span>
                     <span className="lb-c-act" onClick={(e) => e.stopPropagation()}>
                       {isFollowed ? (
@@ -325,7 +374,14 @@ export default function TopTraders({
                     </span>
                   </div>
                   {expanded === t.address && (
-                    <ProfileRow address={t.address} window={win} profile={profiles[t.address]} />
+                    <ProfileRow
+                      address={t.address}
+                      window={win}
+                      winLabel={winLabel}
+                      vlm={t.vlm}
+                      equity={t.accountValue}
+                      profile={profiles[t.address]}
+                    />
                   )}
                 </div>
               )
