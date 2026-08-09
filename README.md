@@ -47,7 +47,20 @@ GitHub Pages serves the **static frontend only**. It talks to the backend runnin
 any server. On a machine without the backend, the site just shows
 "● Backend offline" — nobody else can see your data or trade.
 
-One-time setup on your machine (after [Setup](#setup) below):
+**Don't have the backend yet?** One-line install — paste into a normal PowerShell
+window (needs git and Python 3.11+, no admin rights):
+
+```powershell
+irm https://raw.githubusercontent.com/fille382/hypervault/master/scripts/install.ps1 | iex
+```
+
+It clones the repo into `%USERPROFILE%\hypervault`, sets up the venv and
+dependencies, registers the `hypervault://` protocol, and starts the backend.
+Safe to re-run — an existing install just gets updated. The live site offers the
+same command via the **⤓ install** link in the offline banner. Trading needs your
+key in `backend\.env` afterwards (see [Setup](#setup)); the viewer works keyless.
+
+**Already cloned the repo?** One-time setup (after [Setup](#setup) below):
 
 ```powershell
 # Registers the hypervault:// link protocol for your user (no admin needed).

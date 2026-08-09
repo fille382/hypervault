@@ -6,6 +6,11 @@ import AccountCard from './AccountCard.jsx'
 
 const fmtBtcPx = (v) => `$${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
 
+// One-liner that clones the repo, sets up the venv, registers hypervault://
+// and starts the backend — for visitors who don't have the backend yet.
+const INSTALL_CMD =
+  'irm https://raw.githubusercontent.com/fille382/hypervault/master/scripts/install.ps1 | iex'
+
 // Super-basic inline sparkline for the top bar chip.
 function Sparkline({ points, width = 110, height = 30 }) {
   if (!points || points.length < 2) return null
@@ -41,6 +46,18 @@ export default function TopBar({
   const [showBtc, setShowBtc] = useState(false)
   const [spark, setSpark] = useState(null)
   const [acctOpen, setAcctOpen] = useState(false)
+  const [showInstall, setShowInstall] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const copyInstallCmd = () => {
+    navigator.clipboard
+      ?.writeText(INSTALL_CMD)
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      })
+      .catch(() => {})
+  }
 
   // 90 days of BTC daily closes for the chip's sparkline — same Hyperliquid
   // candle feed (and local cache) as the coin chart.
@@ -92,7 +109,15 @@ export default function TopBar({
             title="Launches the backend on this PC. Needs the one-time hypervault:// registration — run scripts/register-backend-protocol.ps1."
           >
             ▶ start backend
-          </a>
+          </a>{' '}
+          ·{' '}
+          <button
+            className="start-backend-link install-link"
+            title="First time here? One-line install of the backend on this PC."
+            onClick={() => setShowInstall(true)}
+          >
+            ⤓ install
+          </button>
         </span>
       )}
 
@@ -166,6 +191,46 @@ export default function TopBar({
       </div>
 
       {showBtc && <BtcChart onClose={() => setShowBtc(false)} />}
+
+      {showInstall && (
+        <div className="overlay" onClick={() => setShowInstall(false)}>
+          <div className="modal" style={{ width: 540 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div className="modal-title">Install the backend</div>
+              <button className="x-btn" onClick={() => setShowInstall(false)}>
+                ×
+              </button>
+            </div>
+            <p className="note">
+              This site is just the UI — market data and trading run through a small backend on{' '}
+              <b>your own PC</b>, so your keys and orders never touch a server. One-time setup:
+              paste this into a <b>PowerShell</b> window (Win+R, type <code>powershell</code>,
+              Enter):
+            </p>
+            <div className="cmd-box">
+              <code className="num">{INSTALL_CMD}</code>
+              <button className="copy-btn" onClick={copyInstallCmd}>
+                {copied ? '✓ copied' : 'copy'}
+              </button>
+            </div>
+            <p className="note">
+              It installs to <code>%USERPROFILE%\hypervault</code> (needs <b>git</b> and{' '}
+              <b>Python 3.11+</b>), starts the backend, and registers the{' '}
+              <b>▶ start backend</b> link so next time is one click. Trading needs your
+              API-wallet key added afterwards — the viewer works without one. Prefer manual
+              setup? See the{' '}
+              <a
+                href="https://github.com/fille382/hypervault#setup"
+                target="_blank"
+                rel="noreferrer"
+              >
+                README
+              </a>
+              .
+            </p>
+          </div>
+        </div>
+      )}
 
       {confirming && (
         <div className="overlay" onClick={() => setConfirming(false)}>
