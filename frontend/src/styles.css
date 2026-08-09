@@ -1759,11 +1759,14 @@ button {
   color: var(--text);
   border-color: var(--green-line);
 }
-.lb-modal {
-  width: 780px;
+.modal.lb-modal {
+  /* Double class so the later generic .modal { width: 440px } can't win. */
+  width: 720px;
   max-height: calc(100vh - 60px);
   display: flex;
   flex-direction: column;
+  /* Columns adapt to the modal's real width (zoom included) via @container. */
+  container-type: inline-size;
 }
 .lb-sub {
   font-size: 12px;
@@ -1800,16 +1803,26 @@ button {
   background: var(--green-dim);
   color: var(--green);
 }
-.lb-mineq {
+select.lb-mineq {
+  /* Compact pill matching the chip groups — never a full-width bar. The
+     element selector outranks .select's later width:100% / padding / font. */
   width: auto;
-  padding: 6px 10px;
-  font-size: 12px;
+  appearance: none;
+  -webkit-appearance: none;
   margin-left: auto;
+  padding: 7px 28px 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%235d6e73' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+select.lb-mineq:hover {
+  color: var(--text);
+  border-color: var(--green-line);
 }
 .lb-scroll {
-  /* One horizontal scroll container for header + rows, so narrow viewports
-     scroll the table instead of breaking the grid. */
-  overflow-x: auto;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -1818,11 +1831,12 @@ button {
 .lb-table-head,
 .lb-row {
   display: grid;
-  grid-template-columns: 34px minmax(150px, 1.4fr) 1fr 1.1fr 0.9fr 1fr 170px;
-  gap: 8px;
+  /* The trader column has a floor so names can never collapse to nothing;
+     the @container tiers below drop columns before that floor is reached. */
+  grid-template-columns: 32px minmax(110px, 1.4fr) 90px 118px 160px;
+  gap: 10px;
   align-items: center;
-  padding: 7px 10px;
-  min-width: 680px;
+  padding: 8px 10px;
 }
 .lb-table-head {
   font-size: 11px;
@@ -1833,6 +1847,9 @@ button {
 }
 .lb-rows {
   overflow-y: auto;
+  /* Explicit: overflow-y alone would compute overflow-x to auto, and any
+     sub-pixel excess would grow a useless horizontal scrollbar. */
+  overflow-x: hidden;
   flex: 1;
   min-height: 120px;
 }
@@ -1843,6 +1860,7 @@ button {
   border-bottom: 1px solid var(--border-soft);
   cursor: pointer;
   font-size: 13px;
+  transition: background 0.12s;
 }
 .lb-row:hover {
   background: var(--row-hover);
@@ -1850,13 +1868,53 @@ button {
 .lb-row.expanded {
   background: var(--row);
 }
+.lb-c-rank {
+  display: flex;
+  justify-content: center;
+  font-size: 12px;
+}
+.lb-medal {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.lb-medal.m1 {
+  color: #ffd75e;
+  background: rgba(255, 215, 94, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 215, 94, 0.35);
+}
+.lb-medal.m2 {
+  color: #ccd8dd;
+  background: rgba(204, 216, 221, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(204, 216, 221, 0.3);
+}
+.lb-medal.m3 {
+  color: #e5a06e;
+  background: rgba(229, 160, 110, 0.13);
+  box-shadow: inset 0 0 0 1px rgba(229, 160, 110, 0.32);
+}
 .lb-c-num {
   text-align: right;
 }
-.lb-table-head .lb-c-num {
-  text-align: right;
-}
 .lb-c-trader {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.lb-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.lb-id {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1872,20 +1930,37 @@ button {
   font-size: 10.5px;
   color: var(--text-faint);
 }
+.lb-c-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.25;
+}
+.lb-metric-main {
+  font-weight: 600;
+}
+.lb-metric-sub {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
 .lb-c-act {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
 }
 .lb-btn {
+  /* Fixed widths so Follow/Following and View/Viewing line up across rows. */
+  width: 92px;
+  text-align: center;
   background: var(--green-dim);
   border: 1px solid var(--green-line);
   color: var(--green);
   border-radius: 7px;
-  padding: 4px 10px;
+  padding: 5px 0;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+  transition: border-color 0.12s, color 0.12s;
 }
 .lb-btn:hover {
   filter: brightness(1.15);
@@ -1904,6 +1979,7 @@ button {
   cursor: default;
 }
 .lb-btn.view {
+  width: 62px;
   background: none;
   border-color: var(--border);
   color: var(--text-dim);
@@ -1923,7 +1999,7 @@ button {
   font-size: 13px;
 }
 .lb-profile {
-  padding: 10px 12px 12px 42px;
+  padding: 10px 12px 12px 52px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--row);
 }
@@ -1971,6 +2047,52 @@ button {
   margin-top: 4px;
   font-size: 11.5px;
   line-height: 1.5;
+}
+/* Shown in the expanded profile only when the equity column is hidden. */
+.lb-eq-stat {
+  display: none;
+}
+/* Responsive tiers keyed to the modal's own width, so browser zoom and
+   narrow windows degrade by dropping columns — never by scrolling sideways. */
+@container (max-width: 600px) {
+  .lb-c-eq {
+    display: none;
+  }
+  .lb-eq-stat {
+    display: inline;
+  }
+  .lb-table-head,
+  .lb-row {
+    grid-template-columns: 32px minmax(100px, 1fr) 118px 146px;
+  }
+  .lb-btn {
+    width: 84px;
+  }
+  .lb-btn.view {
+    width: 56px;
+  }
+}
+@container (max-width: 480px) {
+  .lb-table-head,
+  .lb-row {
+    grid-template-columns: 24px minmax(0, 1fr) 104px 126px;
+    gap: 8px;
+  }
+  .lb-btn {
+    width: 76px;
+    font-size: 11px;
+  }
+  .lb-btn.view {
+    width: 46px;
+  }
+  .lb-profile {
+    padding-left: 44px;
+  }
+}
+@media (max-width: 760px) {
+  .overlay {
+    padding: 12px;
+  }
 }
 
 /* ── Modal ───────────────────────────────────────────────────────────── */
