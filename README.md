@@ -31,6 +31,10 @@ your backend is running (see [The live site](#the-live-site) below).
 - **Vault following** — any vault or wallet address; positions, balances, trade history,
   and funding refresh live. Save multiple vaults; their fills stream into an activity
   feed with toasts.
+- **Top traders** — Hyperliquid's leaderboard built in (🏆 button): rank by PnL, ROI,
+  or volume over 24h/7d/30d/all-time, expand a row for win rate, average hold time,
+  favourite markets and a PnL sparkline, then follow any wallet with one click — it
+  gets the full vault treatment above.
 - **Copy-trading** — Mirror any position with your own size/leverage, partial closes,
   take-profit/stop-loss triggers, spot buys, all behind the safety rails below.
 
@@ -212,6 +216,8 @@ Pushes to `master` that touch `frontend/` auto-deploy to GitHub Pages via
 | GET | `/api/account/trades` | your persisted fill history (paged with `before`) |
 | GET | `/api/peers` | positions for saved vault addresses |
 | GET | `/api/fills` | recent fills for saved vaults (activity feed) |
+| GET | `/api/leaderboard` | top traders; `window` day/week/month/allTime, `sort` pnl/roi/vlm, `minAccountValue` |
+| GET | `/api/trader/{address}` | trader profile: PnL history per window, win rate, avg hold, top markets |
 | GET | `/api/candles/{coin}` | OHLCV, locally cached; `interval`, `bars`, `before` |
 | GET | `/api/book/{coin}` | live order book (websocket-fed); `levels`, `sig`, `mantissa` |
 | GET | `/api/trades/{coin}` | recent public trades (the tape); `since` cursor |

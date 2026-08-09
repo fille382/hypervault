@@ -29,6 +29,7 @@ export default function VaultPanel({
   myFills = [],
   onTimeframe,
   notify,
+  onOpenTopTraders,
 }) {
   const [editing, setEditing] = useState(false)
   const [ddOpen, setDdOpen] = useState(false)
@@ -152,6 +153,15 @@ export default function VaultPanel({
                       >
                         + Add a vault…
                       </button>
+                      <button
+                        className="dd-add"
+                        onClick={() => {
+                          onOpenTopTraders?.()
+                          setDdOpen(false)
+                        }}
+                      >
+                        🏆 Browse top traders…
+                      </button>
                     </div>
                   </>
                 )}
@@ -163,6 +173,9 @@ export default function VaultPanel({
                   change
                 </button>
               </span>
+              <button className="top-traders-btn" onClick={() => onOpenTopTraders?.()}>
+                🏆 Top traders
+              </button>
               {/* Compact stats — the tables below carry the detail; hover for
                   full precision. */}
               <div className="vault-stats-inline num">

@@ -95,6 +95,11 @@ class HLInfo:
         # matching what Hyperliquid's own trade-history UI shows.
         return await self._post({"type": "userFills", "user": address, "aggregateByTime": True})
 
+    async def portfolio(self, address: str) -> Any:
+        # PnL / account-value history per window (day, week, month, allTime,
+        # plus perp-only variants). Works for any address, vault or wallet.
+        return await self._post({"type": "portfolio", "user": address})
+
     async def l2_book(
         self, coin: str, sig: Optional[int] = None, mantissa: Optional[int] = None
     ) -> Any:
@@ -299,6 +304,150 @@ def parse_fills(raw: Any) -> list[dict]:
             }
         )
     return out
+
+
+def _downsample_history(points: Any, max_points: int) -> list[list]:
+    """[[ms, "value"], ...] -> [[ms, float], ...] thinned to <= max_points.
+
+    Keeps both endpoints so the sparkline's start/end are exact.
+    """
+    rows: list[list] = []
+    for p in points or []:
+        try:
+            t, v = p
+        except (TypeError, ValueError):
+            continue
+        rows.append([t, _f(v) or 0.0])
+    if len(rows) <= max_points:
+        return rows
+    step = (len(rows) - 1) / (max_points - 1)
+    return [rows[round(i * step)] for i in range(max_points)]
+
+
+PORTFOLIO_WINDOWS = ("day", "week", "month", "allTime")
+
+
+def parse_portfolio(raw: Any, max_points: int = 60) -> dict:
+    """portfolio -> {window: {vlm, pnlHistory, accountValueHistory}}.
+
+    Only the four combined windows are kept (the perp-only variants — perpDay
+    etc. — are dropped); histories are downsampled for sparkline use.
+    """
+    out: dict[str, dict] = {}
+    for pair in raw or []:
+        try:
+            label, data = pair
+        except (TypeError, ValueError):
+            continue
+        if label not in PORTFOLIO_WINDOWS or not isinstance(data, dict):
+            continue
+        out[label] = {
+            "vlm": _f(data.get("vlm")),
+            "pnlHistory": _downsample_history(data.get("pnlHistory"), max_points),
+            "accountValueHistory": _downsample_history(data.get("accountValueHistory"), max_points),
+        }
+    return out
+
+
+def compute_trade_stats(raw_fills: Any) -> dict:
+    """Raw userFills -> win rate / hold time / favourite markets.
+
+    A "round trip" is one position episode per coin: it opens when the signed
+    size leaves zero and closes when it returns to zero (a flip closes one and
+    opens the next). Wins are episodes whose summed closedPnl is positive.
+    userFills caps at the 2000 most recent fills, so these are *recent* stats;
+    episodes already open before the window (or still open now) contribute no
+    hold time, and only closed episodes count toward the win rate.
+
+    Only PERP fills count — that's what a copier would mirror. Spot fills
+    (coin "@107" or "PURR/USDC") are token buys/sells where position episodes
+    and closedPnl don't mean the same thing.
+
+    Whales often scale in/out without ever flattening, so zero completed
+    episodes is common; winRate then falls back to the share of profitable
+    closing fills (each fill with a non-zero closedPnl is one sample).
+    """
+    # userFills arrives newest-first, and fills in one block share a timestamp
+    # (e.g. a close plus a re-entry). Reverse before the stable sort so
+    # same-millisecond fills keep true execution order once sorted ascending.
+    ordered = list(raw_fills or [])
+    ordered.reverse()
+    fills = sorted(
+        (
+            f
+            for f in ordered
+            if f.get("time")
+            and f.get("coin")
+            and not str(f["coin"]).startswith("@")
+            and "/" not in str(f["coin"])
+        ),
+        key=lambda f: f["time"],
+    )
+    by_coin: dict[str, list[dict]] = {}
+    for f in fills:
+        by_coin.setdefault(f["coin"], []).append(f)
+
+    wins = losses = 0
+    close_wins = close_losses = 0  # fill-level fallback when no episode completes
+    hold_ms: list[int] = []
+    notional_by_coin: dict[str, float] = {}
+    for coin, coin_fills in by_coin.items():
+        # startPosition is the signed size BEFORE the first observed fill, so
+        # we can tell a fresh episode from one that predates the window.
+        pos = _f(coin_fills[0].get("startPosition")) or 0.0
+        opened_at: Optional[int] = None  # None => open time unknown/predates window
+        episode_pnl = 0.0
+        for f in coin_fills:
+            sz = _f(f.get("sz")) or 0.0
+            delta = sz if f.get("side") == "B" else -sz
+            new_pos = pos + delta
+            if abs(new_pos) < 1e-8:
+                new_pos = 0.0
+            fill_pnl = _f(f.get("closedPnl")) or 0.0
+            episode_pnl += fill_pnl
+            if fill_pnl > 0:
+                close_wins += 1
+            elif fill_pnl < 0:
+                close_losses += 1
+            notional_by_coin[coin] = notional_by_coin.get(coin, 0.0) + sz * (_f(f.get("px")) or 0.0)
+            crossed_zero = pos != 0.0 and (new_pos == 0.0 or (pos > 0) != (new_pos > 0))
+            if crossed_zero:
+                # Strictly positive counts as a win — a break-even close still
+                # paid fees (closedPnl excludes them).
+                if episode_pnl > 0:
+                    wins += 1
+                else:
+                    losses += 1
+                if opened_at is not None:
+                    hold_ms.append(f["time"] - opened_at)
+                episode_pnl = 0.0
+                opened_at = f["time"] if new_pos != 0.0 else None  # a flip starts the next episode
+            elif pos == 0.0 and new_pos != 0.0:
+                opened_at = f["time"]
+            pos = new_pos
+
+    closed = wins + losses
+    close_total = close_wins + close_losses
+    if closed:
+        win_rate, win_rate_basis = wins / closed, "roundTrips"
+    elif close_total:
+        win_rate, win_rate_basis = close_wins / close_total, "closes"
+    else:
+        win_rate, win_rate_basis = None, None
+    top_coins = sorted(notional_by_coin.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    return {
+        "fillCount": len(fills),
+        "roundTrips": closed,
+        "wins": wins,
+        "losses": losses,
+        "winRate": win_rate,
+        # "roundTrips" = per completed position episode; "closes" = per
+        # closing fill (whales that never flatten have no completed episodes).
+        "winRateBasis": win_rate_basis,
+        "avgHoldMs": (sum(hold_ms) / len(hold_ms)) if hold_ms else None,
+        "topCoins": [{"coin": c, "notional": n} for c, n in top_coins],
+        "since": fills[0]["time"] if fills else None,
+    }
 
 
 def parse_candles(raw: Any) -> list[dict]:

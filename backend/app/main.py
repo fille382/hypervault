@@ -8,6 +8,7 @@ import asyncio
 import logging
 import time
 
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -19,16 +20,19 @@ from .config import BACKEND_DIR, settings, update_env_file
 from .fill_store import FillStore
 from .hl_info import (
     HLInfo,
+    compute_trade_stats,
     parse_candles,
     parse_fills,
     parse_margin_summary,
     parse_meta_ctxs,
+    parse_portfolio,
     parse_positions,
     parse_spot_meta_ctxs,
     value_spot_balances,
 )
 from .hl_trade import HLTrader, TradingNotConfigured, UpstreamRateLimited
 from .hl_ws import HLWebSocketFeed, parse_book
+from .leaderboard import METRICS as LB_METRICS, WINDOWS as LB_WINDOWS, LeaderboardCache
 from .models import (
     ArmRequest,
     CloseRequest,
@@ -52,6 +56,19 @@ fill_store = FillStore(BACKEND_DIR / "data" / "trades.db")
 # Live push feed from Hyperliquid: one connection, allMids always on, order
 # books subscribed per coin on demand. Strictly less upstream load than polling.
 ws_feed = HLWebSocketFeed(settings.base_url)
+# Top-traders leaderboard (mainnet-only upstream), cached & trimmed in memory.
+leaderboard_cache = LeaderboardCache()
+
+
+async def _prefetch_leaderboard() -> None:
+    """Warm the leaderboard cache at boot so the first click doesn't wait ~30s
+    for the 33 MB upstream download. Best-effort — failures just mean the
+    first /api/leaderboard request does the fetch instead."""
+    try:
+        await leaderboard_cache.top("week", "pnl", 1)
+        logger.info("leaderboard cache warmed")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("leaderboard prefetch failed: %s", exc)
 
 
 @asynccontextmanager
@@ -63,9 +80,12 @@ async def lifespan(_app: FastAPI):
         trader.account_address,
     )
     ws_feed.start()
+    prefetch = asyncio.create_task(_prefetch_leaderboard())
     yield
+    prefetch.cancel()
     await ws_feed.stop()
     await info.aclose()
+    await leaderboard_cache.aclose()
     candle_store.close()
     fill_store.close()
 
@@ -87,14 +107,20 @@ def _valid_address(address: str) -> bool:
 # Small TTL cache so the 5s UI poll doesn't hammer Hyperliquid with requests
 # for data that changes slowly (builder dexes, spot balances, vault names).
 # On upstream failure, a stale entry is served rather than erroring out.
-_ttl_cache: dict[str, tuple[float, Any]] = {}
+# LRU-capped: browsing trader profiles creates per-address keys (raw fills run
+# 1-2 MB each), so without a cap a long session grows without bound. Expired
+# entries are kept while they fit — they're the stale-on-error fallback.
+_TTL_CACHE_MAX = 300
+_ttl_cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
 
 
 async def _cached(key: str, ttl: float, fetch) -> Any:
     now = time.time()
     hit = _ttl_cache.get(key)
-    if hit and now - hit[0] < ttl:
-        return hit[1]
+    if hit:
+        _ttl_cache.move_to_end(key)
+        if now - hit[0] < ttl:
+            return hit[1]
     try:
         value = await fetch()
     except Exception:
@@ -102,6 +128,9 @@ async def _cached(key: str, ttl: float, fetch) -> Any:
             return hit[1]
         raise
     _ttl_cache[key] = (now, value)
+    _ttl_cache.move_to_end(key)
+    while len(_ttl_cache) > _TTL_CACHE_MAX:
+        _ttl_cache.popitem(last=False)
     return value
 
 
@@ -330,6 +359,68 @@ async def fills(addresses: str, hours: float = 24, limit: int = 60):
     lists = await asyncio.gather(*(one(a) for a in addrs))
     merged = sorted((f for sub in lists for f in sub), key=lambda f: f["time"], reverse=True)
     return {"fills": merged[:limit]}
+
+
+@app.get("/api/leaderboard")
+async def leaderboard(
+    window: str = "week", sort: str = "pnl", limit: int = 10, minAccountValue: float = 0.0
+):
+    """Top traders on Hyperliquid, ranked within a time window.
+
+    `window`: day | week | month | allTime; `sort`: pnl | roi | vlm. Rows come
+    from the exchange's own leaderboard (the one behind app.hyperliquid.xyz),
+    proxied and cached here because the raw file is ~33 MB. Every address is a
+    plain wallet you can follow exactly like a vault.
+    """
+    if window not in LB_WINDOWS:
+        raise HTTPException(status_code=400, detail=f"window must be one of: {', '.join(LB_WINDOWS)}")
+    if sort not in LB_METRICS:
+        raise HTTPException(status_code=400, detail=f"sort must be one of: {', '.join(LB_METRICS)}")
+    limit = max(1, min(int(limit), 100))
+    try:
+        return await leaderboard_cache.top(window, sort, limit, max(0.0, float(minAccountValue)))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Leaderboard unavailable: {exc}") from exc
+
+
+@app.get("/api/trader/{address}")
+async def trader_profile(address: str):
+    """Profile stats for one trader: PnL curves per window (for sparklines),
+    win rate / hold time derived from their recent fills, and whether the
+    address is actually a vault. Everything is best-effort — whatever piece
+    fails comes back null rather than failing the profile."""
+    address = address.strip()
+    if not _valid_address(address):
+        raise HTTPException(status_code=400, detail="Expected a 0x… 42-character address.")
+    key = address.lower()
+
+    async def build() -> dict:
+        async def _try(fetch):
+            try:
+                return await fetch()
+            except Exception:  # noqa: BLE001
+                return None
+
+        raw_portfolio, raw_fills, details = await asyncio.gather(
+            _try(lambda: info.portfolio(address)),
+            # Same cache key the activity feed uses — a recent poll makes this free.
+            _try(lambda: _cached(f"fills:{key}", 300, lambda: info.user_fills(address))),
+            _try(lambda: _cached(f"details:{key}", 600, lambda: info.vault_details(address))),
+        )
+        if raw_portfolio is None and raw_fills is None:
+            raise RuntimeError("could not reach Hyperliquid for this address")
+        return {
+            "address": address,
+            "isVault": bool(details),
+            "vaultName": (details or {}).get("name"),
+            "portfolio": parse_portfolio(raw_portfolio) if raw_portfolio else None,
+            "stats": compute_trade_stats(raw_fills) if raw_fills is not None else None,
+        }
+
+    try:
+        return await _cached(f"profile:{key}", 120, build)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Trader profile unavailable: {exc}") from exc
 
 
 @app.get("/api/account")

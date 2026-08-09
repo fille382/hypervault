@@ -66,6 +66,19 @@ export const getCandles = (coin, interval = '1h', bars = 200, before = 0) =>
 // Spot pairs ("HYPE/USDC" …) with mark prices, for the order ticket's Spot tab.
 export const getSpotMeta = () => fetch(API_BASE + '/api/spot/meta').then(handle)
 
+// Top traders on Hyperliquid (the exchange's own leaderboard, proxied by the
+// backend). window: day|week|month|allTime; sort: pnl|roi|vlm.
+export const getLeaderboard = (window = 'week', sort = 'pnl', limit = 50, minAccountValue = 0) =>
+  fetch(
+    API_BASE +
+      `/api/leaderboard?window=${window}&sort=${sort}&limit=${limit}${
+        minAccountValue ? `&minAccountValue=${minAccountValue}` : ''
+      }`,
+  ).then(handle)
+// One trader's profile: PnL sparkline data, win rate / hold time, vault or wallet.
+export const getTraderProfile = (address) =>
+  fetch(API_BASE + `/api/trader/${encodeURIComponent(address)}`).then(handle)
+
 export const setArm = (armed) => post('/api/arm', { armed })
 export const placeOrder = (payload) => post('/api/order', payload)
 // Spot market buy/sell — actually owning the tokens, no leverage.

@@ -3,6 +3,7 @@ import TopBar from './components/TopBar.jsx'
 import VaultPanel from './components/VaultPanel.jsx'
 import AccountPanel from './components/AccountPanel.jsx'
 import TradeModal from './components/TradeModal.jsx'
+import TopTraders from './components/TopTraders.jsx'
 import {
   getHealth,
   getMeta,
@@ -142,6 +143,10 @@ export default function App() {
   // was closed. New fills after the first load also fire a toast.
   const [fills, setFills] = useState([])
   const seenFillsRef = useRef(null) // null until the first load (history, not news)
+  // Addresses whose fills we've already seen once. A just-followed trader's
+  // backlog is history, not breaking news — only toast for addresses that
+  // were being tracked on the previous poll.
+  const trackedAddrsRef = useRef(new Set())
   // Your own recent trades, for the chart markers (opens / closes on the coin).
   const [myTrades, setMyTrades] = useState([])
   useEffect(() => {
@@ -355,11 +360,15 @@ export default function App() {
           const keys = new Set(list.map(fillKey))
           const prev = seenFillsRef.current
           seenFillsRef.current = keys
+          const prevAddrs = trackedAddrsRef.current
+          trackedAddrsRef.current = new Set(savedVaults.map((s) => s.address.toLowerCase()))
           if (!prev) return // first load is history, not breaking news
           // One toast per new fill, oldest first so they queue in trade order.
           // The toast queue paces the display; if a poll brings a real flood,
           // everything past the first few is summarized in a single closer.
-          const fresh = list.filter((f) => !prev.has(fillKey(f)))
+          const fresh = list.filter(
+            (f) => !prev.has(fillKey(f)) && prevAddrs.has(f.address.toLowerCase()),
+          )
           const shown = fresh.slice(0, FILL_TOASTS_MAX)
           for (const f of shown.reverse()) {
             showToast(
@@ -411,6 +420,23 @@ export default function App() {
       persistVaults(next)
       return next
     })
+  }
+
+  // Top-traders discovery (the leaderboard modal).
+  const [showTopTraders, setShowTopTraders] = useState(false)
+  // Follow WITHOUT switching the dashboard to them: adds the address to the
+  // saved list right away, so its fills/positions start feeding the activity
+  // feed and chart dots. (The auto-save effect above only records addresses
+  // that have loaded as the active vault — a leaderboard follow shouldn't
+  // have to yank the whole dashboard over to do the same.)
+  const followAddress = (addr, name) => {
+    setSavedVaults((prev) => {
+      if (prev.some((s) => s.address.toLowerCase() === addr.toLowerCase())) return prev
+      const next = [...prev, { address: addr, name: name || null }]
+      persistVaults(next)
+      return next
+    })
+    showToast('ok', `Following ${name || shortAddr(addr)} — their trades will show in your feed`)
   }
 
   const onToggleArm = async (next) => {
@@ -510,6 +536,7 @@ export default function App() {
           myFills={myTrades}
           onTimeframe={setChartTf}
           notify={showToast}
+          onOpenTopTraders={() => setShowTopTraders(true)}
         />
         <AccountPanel
           health={health}
@@ -525,6 +552,19 @@ export default function App() {
           fillsMaxed={fillsLimit >= FILLS_LIMIT_MAX}
         />
       </div>
+      {showTopTraders && (
+        <TopTraders
+          onClose={() => setShowTopTraders(false)}
+          savedVaults={savedVaults}
+          activeAddress={activeAddress}
+          onFollow={followAddress}
+          onUnfollow={removeVault}
+          onView={(addr) => {
+            onSubmitAddress(addr)
+            setShowTopTraders(false)
+          }}
+        />
+      )}
       {trade && (
         <TradeModal
           initial={trade}

@@ -45,6 +45,19 @@ export const fmtPct = (frac, dp = 1) => {
 
 export const shortAddr = (a) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a || '')
 
+// Compact duration from milliseconds: "3d 4h", "5h 12m", "8m", "45s".
+export const fmtDuration = (ms) => {
+  if (ms == null || Number.isNaN(ms) || ms < 0) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h${m % 60 ? ` ${m % 60}m` : ''}`
+  const d = Math.floor(h / 24)
+  return `${d}d${h % 24 ? ` ${h % 24}h` : ''}`
+}
+
 // Display name for a coin: builder-dex markets come prefixed ("xyz:SP500");
 // show just "SP500" (keep the full id for API calls and React keys).
 export const coinLabel = (c) => (c && c.includes(':') ? c.split(':')[1] : c || '')
