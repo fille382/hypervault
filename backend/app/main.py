@@ -168,7 +168,10 @@ async def _all_positions(address: str) -> tuple[list[dict], dict]:
         return lambda: info.clearinghouse_state(address, dex=d)
 
     results = await asyncio.gather(
-        info.clearinghouse_state(address),
+        # Cached briefly so a refused/failed upstream call serves the last
+        # snapshot instead of erroring the whole panel. The TTL sits below the
+        # 4s account poll and 5s vault poll, so normal polls stay fresh.
+        _cached(f"chs:{address.lower()}", 3, lambda: info.clearinghouse_state(address)),
         # Builder-dex positions refresh every 30s — they're niche markets and
         # 9x-ing the upstream request rate for them isn't worth it.
         *(_cached(f"dex:{d}:{address.lower()}", 30, dex_fetch(d)) for d in dexs),
@@ -222,7 +225,9 @@ async def _full_meta() -> dict:
     names are dex-prefixed, so the keys never collide. Builder metas are cached
     (60s) — they're niche and this endpoint is polled every 15s.
     """
-    result = parse_meta_ctxs(await info.meta_and_asset_ctxs())
+    # Cached so a refused/failed upstream call degrades to the last snapshot
+    # (mark prices a few seconds stale) instead of failing the whole poll.
+    result = parse_meta_ctxs(await _cached("meta:main", 10, info.meta_and_asset_ctxs))
     dexs = await _builder_dexs()
 
     async def dex_meta(d: str) -> dict:
@@ -342,12 +347,15 @@ async def fills(addresses: str, hours: float = 24, limit: int = 60):
     limit = max(1, min(limit, 1000))
     cutoff = int(time.time() * 1000) - int(hours * 3_600_000)
 
+    # userFills is one of the heaviest /info calls (weight 20). The cache TTL
+    # scales with how many addresses are polled, so the total spend stays
+    # bounded (~300 weight/min) no matter how many traders you follow;
+    # `hours`/`limit` only filter locally, so they can share one entry.
+    fills_ttl = max(15.0, 4.0 * len(addrs))
+
     async def one(addr: str) -> list[dict]:
         try:
-            # userFills is one of the heaviest /info calls (weight 20). A short
-            # TTL cache keeps N vaults × 20s polling well inside the IP budget;
-            # `hours`/`limit` only filter locally, so they can share one entry.
-            raw = await _cached(f"fills:{addr.lower()}", 15, lambda: info.user_fills(addr))
+            raw = await _cached(f"fills:{addr.lower()}", fills_ttl, lambda: info.user_fills(addr))
         except Exception:  # noqa: BLE001 — a dead address shouldn't fail the batch
             return []
         return [

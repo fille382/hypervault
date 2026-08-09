@@ -228,7 +228,11 @@ export default function App() {
       setVaultError(null)
     } catch (e) {
       setVaultError(e.message)
-      setVault(null)
+      // Keep the last good snapshot for THIS address (the panel marks it
+      // stale); only clear when the failure is for a newly entered address.
+      setVault((prev) =>
+        prev && prev.address?.toLowerCase() === activeAddress.toLowerCase() ? prev : null,
+      )
     }
   }, [activeAddress])
 

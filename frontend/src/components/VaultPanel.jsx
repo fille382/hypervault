@@ -216,7 +216,12 @@ export default function VaultPanel({
         </span>
       </div>
 
-      {vaultError ? (
+      {vaultError && vault && (
+        <div className="stale-note">
+          Live update failed — showing the last snapshot. {vaultError}
+        </div>
+      )}
+      {vaultError && !vault ? (
         <div className="spin">Couldn’t load this address — {vaultError}</div>
       ) : !vault ? (
         <div className="spin">Loading vault…</div>

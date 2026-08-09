@@ -24,6 +24,11 @@ _REQUEST_WEIGHTS = {
 }
 _DEFAULT_WEIGHT = 20
 READ_BUDGET_PER_MIN = 900
+# Heavy calls (weight 20 — userFills, metaAndAssetCtxs, candleSnapshot, …) stop
+# spending at this lower line, so the weight-2 reads that render positions and
+# balances always have headroom even when the pollers saturate the budget.
+# Every heavy caller degrades to cached/stale data when refused.
+HEAVY_BUDGET_PER_MIN = 700
 
 
 class HLRateLimited(RuntimeError):
@@ -45,14 +50,17 @@ class HLInfo:
 
         Refusing (rather than queueing) keeps the endpoint fast: callers all
         have a cached/stale fallback, and the budget refills within seconds.
+        Heavy requests refuse at HEAVY_BUDGET_PER_MIN so cheap interactive
+        reads keep working while the background pollers are saturated.
         """
         now = time.time()
         while self._spent and now - self._spent[0][0] > 60:
             self._spent_total -= self._spent.popleft()[1]
-        if self._spent_total + weight > READ_BUDGET_PER_MIN:
+        limit = READ_BUDGET_PER_MIN if weight < _DEFAULT_WEIGHT else HEAVY_BUDGET_PER_MIN
+        if self._spent_total + weight > limit:
             raise HLRateLimited(
-                f"Read budget exhausted ({self._spent_total}/{READ_BUDGET_PER_MIN} "
-                "weight in the last minute) — serving cached data."
+                f"Hyperliquid read budget exhausted ({self._spent_total}/{limit} "
+                "weight in the last minute) — try again in a few seconds."
             )
         self._spent.append((now, weight))
         self._spent_total += weight
