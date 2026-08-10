@@ -189,6 +189,42 @@ port 8001, so there's no CORS to configure in dev.
 
 ---
 
+## Terminal app
+
+Prefer a terminal? The backend ships with an interactive console that **runs the
+backend itself** — one command starts the API server (same FastAPI app the web UI
+uses) and drops you into a prompt:
+
+```powershell
+.\start-terminal.ps1              # Windows helper, or on any OS:
+cd backend
+.\.venv\Scripts\python -m app.terminal    # Windows
+.venv/bin/python -m app.terminal          # macOS / Linux
+```
+
+```
+hv> status                  backend health, network, SAFE/ARM state
+hv> meta btc                markets: mark price, 24h move, open interest
+hv> candles BTC 4h 60       OHLC summary + unicode sparkline
+hv> book BTC                live order book (websocket-fed)
+hv> tape BTC                recent public trades
+hv> vault 0x…               a vault/wallet's positions (defaults to HyperGrowth)
+hv> leaderboard week roi    top traders; 'trader 0x…' for a profile
+hv> account                 your equity + open positions
+hv> order BTC long 100 5    SAFE mode: simulates; ARMED: places a live order
+hv> watch account           rerun any read command every 5s
+```
+
+Every command is a thin client of the local HTTP API, so the SAFE/ARM switch, the
+notional guardrail, and the rate-limit budgeting apply exactly as in the browser —
+there is no side door. `arm` asks you to type `ARM`, and live orders ask you to
+type `LIVE`, before anything is sent. If a backend is already running on port
+8001 (say, for the web UI), the console attaches to it instead of starting a
+second one — both front ends can drive the same backend side by side. For
+scripting there's a one-shot mode: `python -m app.terminal -c "status"`.
+
+---
+
 ## Using it
 
 1. **Pick a coin** — the coin picker (or any position row) loads its chart, order book,
