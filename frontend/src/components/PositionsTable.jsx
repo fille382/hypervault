@@ -42,22 +42,38 @@ export default function PositionsTable({ positions, onMirror, selectedCoin, onSe
                   {p.leverage != null && <span className="lev-badge">{p.leverage}x</span>}
                 </div>
                 <div className={`cell num side-${p.side}`}>
+                  <span className="cell-label">Size</span>
                   {fmtNum(p.size)} <span className="u">{coinLabel(p.coin)}</span>
                 </div>
                 <div className="cell num">
+                  <span className="cell-label">Position Value</span>
                   {p.positionValue != null ? `${fmtNum(p.positionValue, 2)} USDC` : '—'}
                 </div>
-                <div className="cell num">{fmtPrice(p.entryPx)}</div>
-                <div className="cell num">{fmtPrice(p.markPx)}</div>
+                <div className="cell num">
+                  <span className="cell-label">Entry Price</span>
+                  {fmtPrice(p.entryPx)}
+                </div>
+                <div className="cell num">
+                  <span className="cell-label">Mark Price</span>
+                  {fmtPrice(p.markPx)}
+                </div>
                 <div className="cell num pnl-roe">
+                  <span className="cell-label">PNL (ROE %)</span>
                   <span className={pnlPos ? 'pos' : 'neg'}>{fmtSignedUsd(p.unrealizedPnl)}</span>
                   <span className={`roe ${pnlPos ? 'pos' : 'neg'}`}>({fmtPct(p.roe)})</span>
                 </div>
-                <div className="cell num">{fmtPrice(p.liquidationPx)}</div>
                 <div className="cell num">
+                  <span className="cell-label">Liq. Price</span>
+                  {fmtPrice(p.liquidationPx)}
+                </div>
+                <div className="cell num">
+                  <span className="cell-label">Margin</span>
                   {fmtUsd(p.marginUsed)} <span className="u">({cap(p.leverageType)})</span>
                 </div>
-                <div className={`cell num ${fundPos ? 'pos' : 'neg'}`}>{fmtSignedUsd(p.funding)}</div>
+                <div className={`cell num ${fundPos ? 'pos' : 'neg'}`}>
+                  <span className="cell-label">Funding</span>
+                  {fmtSignedUsd(p.funding)}
+                </div>
                 <div className="row-action">
                   <button
                     className="mirror-btn"
