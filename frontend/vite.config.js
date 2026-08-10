@@ -7,6 +7,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
+    // Listen on the LAN too, so you can open the app from your phone at
+    // http://<pc-ip>:5174 (same Wi-Fi). The /api proxy below runs on the PC,
+    // so the backend itself can stay loopback-only.
+    host: true,
     proxy: {
       '/api': 'http://127.0.0.1:8001',
     },

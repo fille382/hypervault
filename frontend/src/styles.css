@@ -46,6 +46,9 @@ body {
     sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  /* Don't let mobile Safari/Chrome inflate text on orientation change. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 .num {
@@ -991,10 +994,13 @@ button {
   min-width: 0;
 }
 @media (max-width: 1180px) {
-  .chart-row {
+  .chart-row,
+  .chart-row.book-hidden {
     grid-template-columns: minmax(0, 1fr);
   }
-  .orderbook {
+  /* Extra specificity: the base .orderbook rule below sets display:flex and
+     would otherwise win the cascade over this earlier media query. */
+  .chart-row .orderbook {
     display: none; /* too cramped next to the chart — the chart wins */
   }
 }
@@ -2159,6 +2165,12 @@ select.lb-mineq:hover {
 .modal {
   width: 440px;
   max-width: 100%;
+  /* Tall tickets (TradeModal on a short/phone screen) scroll inside the
+     modal instead of overflowing the viewport. dvh tracks mobile browser
+     chrome; the vh line is the fallback for older engines. */
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -2793,4 +2805,177 @@ select.lb-mineq:hover {
 .market-row:hover .m-trade {
   border-color: var(--green-line);
   color: var(--green);
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   Mobile — tablets get a compact wrap-friendly top bar; phones additionally
+   swap the wide positions grid for labeled cards, shrink the chart, and
+   stretch popovers/dropdowns to the viewport. Desktop is untouched.
+   ─────────────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 10px 12px;
+  }
+  .brand-sub {
+    display: none; /* the name alone carries the brand on small screens */
+  }
+  .topbar-spacer {
+    flex: 1 1 auto;
+  }
+  .equity-chip .val {
+    font-size: 13px;
+  }
+  .topbar .arm {
+    /* When the bar wraps, keep the ARM switch pinned to the right edge of
+       whichever row it lands on instead of floating mid-row. */
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  /* ── Frame ── */
+  .layout {
+    gap: 12px;
+    padding: 10px 10px calc(40px + env(safe-area-inset-bottom));
+  }
+  .vault-head {
+    padding: 10px 12px 8px;
+  }
+  .vault-stats-inline {
+    /* Full-width row under the vault name instead of squeezing beside it. */
+    margin-left: 0;
+    flex-basis: 100%;
+    gap: 12px;
+  }
+  .tabs {
+    padding: 0 12px;
+    gap: 16px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .table-tools {
+    padding: 10px 12px 4px;
+  }
+  .card {
+    padding: 14px;
+  }
+
+  /* ── Top bar details ── */
+  .btc-spark {
+    display: none; /* the sparkline is the first thing to go on a phone */
+  }
+  .btc-chip {
+    margin-left: 0;
+  }
+  .acct-pop {
+    /* The account popover becomes a near-full-width sheet under the bar. */
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    top: calc(58px + env(safe-area-inset-top));
+    width: auto;
+    max-height: calc(100dvh - 80px);
+  }
+
+  /* ── Chart ── */
+  .chart-panel {
+    padding: 8px 10px 10px;
+  }
+  .chart-body {
+    height: clamp(240px, 45vh, 420px);
+  }
+  .chart-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .chart-intervals {
+    flex-wrap: wrap;
+  }
+  .iv {
+    /* A little more tap area for fingers. */
+    padding: 6px 10px;
+  }
+  .coin-dd {
+    width: min(340px, calc(100vw - 32px));
+  }
+  .chart-panel.fullscreen,
+  .btc-modal {
+    padding: calc(8px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  /* ── Positions: wide grid → labeled cards ── */
+  .table-scroll {
+    overflow-x: visible;
+    padding: 2px 10px 12px;
+  }
+  .table-inner {
+    min-width: 0;
+  }
+  .col-head {
+    display: none;
+  }
+  .rows {
+    max-height: none; /* the page scrolls; no nested scroll traps on touch */
+  }
+  .pos-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    padding: 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    background: var(--row);
+  }
+  .pos-row:last-child {
+    margin-bottom: 0;
+  }
+  .pos-row .coin-cell,
+  .pos-row .row-action {
+    grid-column: 1 / -1;
+  }
+  .cell-label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-faint);
+    margin-bottom: 2px;
+  }
+  .row-action .mirror-btn {
+    width: 100%;
+    padding: 9px;
+    font-size: 13px;
+  }
+
+  /* ── Forms / modals ── */
+  .input,
+  .select,
+  .addr-input,
+  .market-search {
+    font-size: 16px; /* <16px makes iOS Safari zoom the page on focus */
+  }
+  .addr-input {
+    min-width: 0;
+    width: 100%;
+  }
+  .modal {
+    padding: 16px;
+    max-height: calc(100dvh - 24px);
+  }
+  .modal.lb-modal {
+    max-height: calc(100dvh - 24px);
+  }
+
+  /* ── Toasts ── */
+  .toast-stack {
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    left: 10px;
+    right: 10px;
+    transform: none;
+  }
+  .toast {
+    max-width: 100%;
+  }
 }
