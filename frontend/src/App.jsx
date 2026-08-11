@@ -34,6 +34,10 @@ const POLL_BY_TIMEFRAME = {
 const pollMsFor = (tf) => POLL_BY_TIMEFRAME[tf] || 10000
 // Your own positions update at this fixed rate regardless of the chart timeframe.
 const ACCOUNT_POLL_MS = 4000
+// While the backend is unreachable, health is retried this often (a local
+// request that fails instantly — the chart-timeframe cadence would leave the
+// offline pill and install popup up for a minute after the backend starts).
+const RECONNECT_POLL_MS = 3000
 const SAVED_KEY = 'hypervault.savedVaults'
 // Toast queue: how long each toast lives, how many stack on screen at once,
 // and how many more may wait their turn before the oldest waiter is dropped.
@@ -242,6 +246,14 @@ export default function App() {
     const id = setInterval(refresh, pollMs)
     return () => clearInterval(id)
   }, [refresh, visible, pollMs])
+
+  // Fast retry while offline, so the site notices the backend the moment the
+  // installer (or "start backend") brings it up.
+  useEffect(() => {
+    if (online || !visible) return undefined
+    const id = setInterval(refresh, RECONNECT_POLL_MS)
+    return () => clearInterval(id)
+  }, [online, visible, refresh])
 
   // YOUR OWN account (positions + live PnL) — polled fast and independent of the
   // chart timeframe, so your PnL stays current even while viewing a wide candle.

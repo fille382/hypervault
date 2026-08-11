@@ -80,6 +80,15 @@ export default function TopBar({
       clearInterval(id)
     }
   }, [])
+  // The install popup has done its job once the backend answers — close it
+  // and confirm, instead of leaving the setup instructions on screen.
+  useEffect(() => {
+    if (online && showInstall) {
+      setShowInstall(false)
+      notify('ok', 'Backend connected')
+    }
+  }, [online, showInstall, notify])
+
   const armed = !!health?.armed
   const network = health?.network || '…'
   const ms = account?.marginSummary
@@ -216,7 +225,8 @@ export default function TopBar({
             <p className="note">
               It installs to <code>%USERPROFILE%\hypervault</code> (needs <b>git</b> and{' '}
               <b>Python 3.11+</b>), starts the backend, and registers the{' '}
-              <b>▶ start backend</b> link so next time is one click. Trading needs your
+              <b>▶ start backend</b> link so next time is one click. This popup closes by
+              itself once the backend is running. Trading needs your
               API-wallet key added afterwards — the viewer works without one. Prefer manual
               setup? See the{' '}
               <a
