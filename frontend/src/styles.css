@@ -921,6 +921,20 @@ button {
   color: var(--text-dim);
 }
 
+/* Top-10 leaderboard traders' positions on the charted coin */
+.tt-rank {
+  font-weight: 700;
+  font-size: 10px;
+  color: #ffd166;
+  flex-shrink: 0;
+}
+.top-toggle {
+  color: #ffd166;
+}
+.top-toggle.off {
+  color: var(--text-faint);
+}
+
 /* Marker toggles: which vaults' trades are drawn on the chart */
 .marker-strip {
   display: flex;

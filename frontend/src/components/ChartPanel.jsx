@@ -127,6 +127,21 @@ const PEER_COLORS = ['#5aa9ff', '#c084fc', '#fbbf24', '#2dd4bf', '#f472b6', '#a3
 
 const peerLabel = (p) => p.vaultName || shortAddr(p.vaultAddress)
 
+// Top-10 leaderboard traders: one shared gold for all their entry lines (the
+// #rank in the label tells them apart) so they read as a single family next to
+// the peers' per-vault colors. Sparse-dotted keeps them in the background.
+const TOP_COLOR = '#ffd166'
+const topLabel = (t) => t.name || shortAddr(t.address)
+// Whether the top-10 lines are drawn — persisted, ten lines is a lot of ink.
+const SHOW_TOP_KEY = 'hypervault.showTopTraders'
+const loadShowTop = () => {
+  try {
+    return localStorage.getItem(SHOW_TOP_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
 // Map a fill timestamp (ms) to the candle bucket it belongs to: the greatest
 // candle time <= the fill time (binary search; candle times are ascending).
 function snapToCandle(times, fillSec) {
@@ -178,6 +193,7 @@ export default function ChartPanel({
   position,
   myPosition,
   peers = [],
+  topTraders = [],
   fills = [],
   myFills = [],
   onTimeframe,
@@ -190,6 +206,7 @@ export default function ChartPanel({
   const seriesRef = useRef(null)
   const linesRef = useRef([])
   const peerLinesRef = useRef([])
+  const topLinesRef = useRef([])
   const myLinesRef = useRef([])
   const markersRef = useRef(null)
   const tradeDotsRef = useRef(null)
@@ -201,6 +218,7 @@ export default function ChartPanel({
   const [hiddenVaults, setHiddenVaults] = useState(() => new Set()) // addr(lower) with markers off
   const [fullscreen, setFullscreen] = useState(false)
   const [showMyTrades, setShowMyTrades] = useState(true) // your own trade markers
+  const [showTop, setShowTop] = useState(loadShowTop) // top-10 traders' entry lines
   const [markerStyle, setMarkerStyle] = useState(loadMarkerStyle) // 'dots' | 'arrows'
   const hasMyTrades = useMemo(() => myFills.some((f) => f.coin === coin), [myFills, coin])
   // Tell the app the timeframe so it can scale its live-data poll cadence.
@@ -306,6 +324,7 @@ export default function ChartPanel({
       tradeDotsRef.current = null
       linesRef.current = []
       peerLinesRef.current = []
+      topLinesRef.current = []
       myLinesRef.current = []
       candleTimesRef.current = []
     }
@@ -546,6 +565,41 @@ export default function ChartPanel({
       )
     })
   }, [peers, coin, timeframe])
+
+  // Entry lines for the top-10 leaderboard traders holding this coin — gold,
+  // sparse-dotted, labeled by rank so the chart shows where the week's biggest
+  // winners are positioned without following any of them.
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series) return
+    topLinesRef.current.forEach((l) => series.removePriceLine(l))
+    topLinesRef.current = []
+    if (!showTop) return
+    topTraders.forEach((t) => {
+      if (!t.entryPx) return
+      topLinesRef.current.push(
+        series.createPriceLine({
+          price: t.entryPx,
+          color: TOP_COLOR,
+          lineStyle: 4, // sparse dotted
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: `${t.side === 'short' ? '▼' : '▲'} #${t.rank} ${topLabel(t).slice(0, 12)}`,
+        }),
+      )
+    })
+  }, [topTraders, showTop, coin, timeframe])
+
+  const toggleShowTop = () =>
+    setShowTop((s) => {
+      const next = !s
+      try {
+        localStorage.setItem(SHOW_TOP_KEY, next ? '1' : '0')
+      } catch {
+        /* ignore storage errors */
+      }
+      return next
+    })
 
   // Trade markers, AGGREGATED per candle: a vault (or you) that fires many
   // trades inside one bar shows a single marker with the combined total + count,
@@ -1167,6 +1221,39 @@ export default function ChartPanel({
               <span className="peer-entry num">@ {fmtPrice(p.entryPx)}</span>
               <span className={`peer-pnl num ${(p.unrealizedPnl || 0) >= 0 ? 'pos' : 'neg'}`}>
                 {fmtSignedUsd(p.unrealizedPnl)}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {coin && topTraders.length > 0 && (
+        <div className="peer-strip">
+          <button
+            className={`marker-chip top-toggle${showTop ? '' : ' off'}`}
+            title={
+              showTop
+                ? 'Top-10 leaderboard traders (7d PnL) holding this coin — click to hide their entry lines'
+                : 'Show the top-10 traders’ entry lines'
+            }
+            onClick={toggleShowTop}
+          >
+            {showTop ? '●' : '◌'} 🏆 Top 10
+          </button>
+          {topTraders.map((t) => (
+            <button
+              key={t.address}
+              className="peer-chip"
+              title={`${topLabel(t)} — #${t.rank} by 7d PnL · view this trader`}
+              onClick={() => onSelectVault?.(t.address)}
+            >
+              <span className="tt-rank">#{t.rank}</span>
+              <span className="peer-name">{topLabel(t)}</span>
+              <span className={`peer-side ${t.side}`}>
+                {t.side === 'long' ? '▲' : '▼'} {t.side} {t.leverage ? `${t.leverage}x` : ''}
+              </span>
+              <span className="peer-entry num">@ {fmtPrice(t.entryPx)}</span>
+              <span className={`peer-pnl num ${(t.unrealizedPnl || 0) >= 0 ? 'pos' : 'neg'}`}>
+                {fmtSignedUsd(t.unrealizedPnl)}
               </span>
             </button>
           ))}

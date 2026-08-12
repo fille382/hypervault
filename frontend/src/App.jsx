@@ -12,6 +12,7 @@ import {
   getPeers,
   getFills,
   getMyTrades,
+  getLeaderboard,
   setArm,
 } from './api.js'
 import { fmtNum, fmtPrice, shortAddr, coinLabel } from './format.js'
@@ -60,6 +61,12 @@ function persistVaults(list) {
     /* ignore storage errors */
   }
 }
+
+// The top-10 leaderboard list itself barely moves (upstream regenerates every
+// ~20 min); their open positions are worth a relaxed poll so the chart's gold
+// entry lines track reality without spending real read budget.
+const TOP_LIST_POLL_MS = 5 * 60_000
+const TOP_POSITIONS_POLL_MS = 60_000
 
 const FILLS_POLL_MS = 20000
 const FILLS_HOURS = 72
@@ -342,6 +349,50 @@ export default function App() {
     }
   }, [savedVaults, activeAddress, visible, pollMs])
 
+  // Top-10 leaderboard traders (7d PnL, same ranking the Top-traders modal
+  // opens on). Their entries are drawn on every chart like the saved vaults' —
+  // no need to follow anyone to see where the biggest winners sit.
+  const [topTraders, setTopTraders] = useState([]) // [{rank, address, name}, …]
+  const [topPositions, setTopPositions] = useState({}) // addr(lower) -> positions[]
+  useEffect(() => {
+    if (!visible) return undefined
+    let cancelled = false
+    const load = () =>
+      getLeaderboard('week', 'pnl', 10, 0)
+        .then((r) => !cancelled && setTopTraders(r.traders || []))
+        .catch(() => {}) // best-effort — the chart just goes without the lines
+    load()
+    const id = setInterval(load, TOP_LIST_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [visible])
+
+  useEffect(() => {
+    if (!topTraders.length) {
+      setTopPositions({})
+      return undefined
+    }
+    if (!visible) return undefined
+    let cancelled = false
+    const load = () =>
+      getPeers(topTraders.map((t) => t.address))
+        .then((r) => {
+          if (cancelled) return
+          const map = {}
+          for (const p of r.peers || []) map[p.address.toLowerCase()] = p.positions || []
+          setTopPositions(map)
+        })
+        .catch(() => {})
+    load()
+    const id = setInterval(load, TOP_POSITIONS_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [topTraders, visible])
+
   // Poll recent fills for ALL saved vaults (including the active one).
   useEffect(() => {
     if (!savedVaults.length) {
@@ -406,6 +457,23 @@ export default function App() {
       })
       .filter(Boolean)
   }, [savedVaults, activeAddress, peerPositions, selectedCoin])
+
+  // Top-10 traders' open positions on the charted coin. Anyone already drawn
+  // as the followed vault or a saved peer is skipped — one line per wallet.
+  const topOnCoin = useMemo(() => {
+    if (!selectedCoin) return []
+    const shown = new Set(savedVaults.map((s) => s.address.toLowerCase()))
+    shown.add(activeAddress.toLowerCase())
+    return topTraders
+      .filter((t) => !shown.has(t.address.toLowerCase()))
+      .map((t) => {
+        const pos = (topPositions[t.address.toLowerCase()] || []).find(
+          (p) => p.coin === selectedCoin,
+        )
+        return pos ? { ...pos, address: t.address, name: t.name, rank: t.rank } : null
+      })
+      .filter(Boolean)
+  }, [topTraders, topPositions, savedVaults, activeAddress, selectedCoin])
 
   const onSubmitAddress = (addr) => {
     // Accept a bare 0x address OR a full Hyperliquid vault URL (extract the address).
@@ -536,6 +604,7 @@ export default function App() {
           selectedPosition={selectedPosition}
           myPosition={myPosition}
           peersOnCoin={peersOnCoin}
+          topOnCoin={topOnCoin}
           fills={fills}
           myFills={myTrades}
           onTimeframe={setChartTf}

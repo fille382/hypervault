@@ -25,6 +25,7 @@ export default function VaultPanel({
   selectedPosition,
   myPosition,
   peersOnCoin = [],
+  topOnCoin = [],
   fills = [],
   myFills = [],
   onTimeframe,
@@ -65,6 +66,7 @@ export default function VaultPanel({
           position={selectedPosition}
           myPosition={myPosition}
           peers={peersOnCoin}
+          topTraders={topOnCoin}
           fills={fills}
           myFills={myFills}
           onTimeframe={onTimeframe}
