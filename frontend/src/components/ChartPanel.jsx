@@ -207,6 +207,13 @@ export default function ChartPanel({
   useEffect(() => onTimeframe?.(timeframe), [timeframe, onTimeframe])
   const [drawMode, setDrawMode] = useState(false)
   const [measureMode, setMeasureMode] = useState(false) // drag to measure % change
+  // Switching coin or timeframe mid-tool exits the tool. A half-drawn line is
+  // anchored to a bar of the old series (a 5m timestamp isn't a 3d bar), and
+  // both tools freeze the price axis, which the new candles need to re-fit.
+  useEffect(() => {
+    setDrawMode(false)
+    setMeasureMode(false)
+  }, [coin, timeframe])
   const [measureBox, setMeasureBox] = useState(null) // {x1,y1,x2,y2,pct,diff,up} in px
   const [trendVersion, setTrendVersion] = useState(0) // bumps when lines change
   const [hasTrendlines, setHasTrendlines] = useState(false)
