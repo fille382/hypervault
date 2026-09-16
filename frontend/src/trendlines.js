@@ -31,6 +31,24 @@ export function rayPoints(ln, _step) {
   ]
 }
 
+// Run a trendline series mutation (setData / add / remove) without letting the
+// chart scroll. A line anchored past the last candle raises the time scale's
+// "base index" (the last bar with real data). lightweight-charts compensates
+// the right offset when that index grows, but NOT when it shrinks back — so a
+// preview line following the cursor into the future room and then back over
+// the candles (e.g. out to the price axis and back) jumps the whole chart left
+// by a few bars. Snapshot the visible range and restore it if the mutation
+// moved it. Callers freeze user scrolling while drawing, so the snapshot can't
+// race a pan.
+export function keepView(chart, fn) {
+  const ts = chart.timeScale()
+  const before = ts.getVisibleLogicalRange()
+  fn()
+  if (!before) return
+  const after = ts.getVisibleLogicalRange()
+  if (!after || after.from !== before.from || after.to !== before.to) ts.setVisibleLogicalRange(before)
+}
+
 export const TREND_OPTS = {
   color: '#ffce5c', // amber, matches the theme
   lineWidth: 2,

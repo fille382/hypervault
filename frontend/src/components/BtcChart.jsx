@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { createChart, AreaSeries, LineSeries } from 'lightweight-charts'
 import { getCandles } from '../api.js'
-import { loadTrendStore, saveTrendStore, rayPoints, TREND_OPTS } from '../trendlines.js'
+import { loadTrendStore, saveTrendStore, rayPoints, keepView, TREND_OPTS } from '../trendlines.js'
 
 const BTC_KEY = '__BTC__' // trendline-store key for this chart (daily macro view)
 const RANGES = [
@@ -117,21 +117,23 @@ export default function BtcChart({ onClose }) {
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    trendSeriesRef.current.forEach((item) => {
-      try {
-        chart.removeSeries(item.series)
-      } catch {
-        /* already gone */
-      }
-    })
-    trendSeriesRef.current = []
     const lines = loadTrendStore()[BTC_KEY] || []
     const step = dataStep()
-    for (const ln of lines) {
-      const s = chart.addSeries(LineSeries, TREND_OPTS)
-      s.setData(rayPoints(ln, step))
-      trendSeriesRef.current.push({ series: s, ln })
-    }
+    keepView(chart, () => {
+      trendSeriesRef.current.forEach((item) => {
+        try {
+          chart.removeSeries(item.series)
+        } catch {
+          /* already gone */
+        }
+      })
+      trendSeriesRef.current = []
+      for (const ln of lines) {
+        const s = chart.addSeries(LineSeries, TREND_OPTS)
+        s.setData(rayPoints(ln, step))
+        trendSeriesRef.current.push({ series: s, ln })
+      }
+    })
     setHasLines(lines.length > 0)
   }, [trendVersion, dataTick])
 
@@ -140,6 +142,14 @@ export default function BtcChart({ onClose }) {
     const chart = chartRef.current
     const series = seriesRef.current
     if (!chart || !series || !drawMode) return undefined
+
+    // Freeze the chart while drawing (same as the coin chart): no pan/zoom,
+    // no price-axis rescale, and no auto-scroll when the preview line runs
+    // past the last bar. Restored in the cleanup below.
+    const priceScale = chart.priceScale('right')
+    priceScale.applyOptions({ autoScale: false })
+    chart.timeScale().applyOptions({ shiftVisibleRangeOnNewBar: false })
+    chart.applyOptions({ handleScroll: false, handleScale: false })
 
     const pointAt = (param) => {
       if (!param?.point) return null
@@ -163,7 +173,7 @@ export default function BtcChart({ onClose }) {
       if (!pt) return
       if (!draftRef.current) {
         const s = chart.addSeries(LineSeries, TREND_OPTS)
-        s.setData([pt])
+        keepView(chart, () => s.setData([pt]))
         draftRef.current = { t1: pt.time, p1: pt.value, series: s, raf: null, pending: null }
         return
       }
@@ -172,7 +182,7 @@ export default function BtcChart({ onClose }) {
       if (d.raf) cancelAnimationFrame(d.raf)
       const pts = [{ time: d.t1, value: d.p1 }, pt].sort((x, y) => x.time - y.time)
       const ln = { t1: pts[0].time, p1: pts[0].value, t2: pts[1].time, p2: pts[1].value }
-      d.series.setData(rayPoints(ln, dataStep()))
+      keepView(chart, () => d.series.setData(rayPoints(ln, dataStep())))
       trendSeriesRef.current.push({ series: d.series, ln })
       draftRef.current = null
       const store = loadTrendStore()
@@ -197,7 +207,8 @@ export default function BtcChart({ onClose }) {
         if (cur.lastT === p.time && cur.lastV === p.value) return
         cur.lastT = p.time
         cur.lastV = p.value
-        cur.series.setData([{ time: cur.t1, value: cur.p1 }, p].sort((x, y) => x.time - y.time))
+        const pts = [{ time: cur.t1, value: cur.p1 }, p].sort((x, y) => x.time - y.time)
+        keepView(chart, () => cur.series.setData(pts))
       })
     }
 
@@ -206,6 +217,9 @@ export default function BtcChart({ onClose }) {
     return () => {
       chart.unsubscribeClick(onClick)
       chart.unsubscribeCrosshairMove(onMove)
+      priceScale.applyOptions({ autoScale: true })
+      chart.timeScale().applyOptions({ shiftVisibleRangeOnNewBar: true })
+      chart.applyOptions({ handleScroll: true, handleScale: true })
       const d = draftRef.current
       if (d) {
         if (d.raf) cancelAnimationFrame(d.raf)
