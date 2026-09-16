@@ -18,7 +18,7 @@ import {
 } from '../format.js'
 import CoinIcon from './CoinIcon.jsx'
 import CoinPicker from './CoinPicker.jsx'
-import { loadTrendStore, saveTrendStore, rayPoints, TREND_OPTS } from '../trendlines.js'
+import { loadTrendStore, saveTrendStore, rayPoints, keepView, TREND_OPTS } from '../trendlines.js'
 import {
   loadAlertStore,
   addAlert,
@@ -207,6 +207,13 @@ export default function ChartPanel({
   useEffect(() => onTimeframe?.(timeframe), [timeframe, onTimeframe])
   const [drawMode, setDrawMode] = useState(false)
   const [measureMode, setMeasureMode] = useState(false) // drag to measure % change
+  // Switching coin or timeframe mid-tool exits the tool. A half-drawn line is
+  // anchored to a bar of the old series (a 5m timestamp isn't a 3d bar), and
+  // both tools freeze the price axis, which the new candles need to re-fit.
+  useEffect(() => {
+    setDrawMode(false)
+    setMeasureMode(false)
+  }, [coin, timeframe])
   const [measureBox, setMeasureBox] = useState(null) // {x1,y1,x2,y2,pct,diff,up} in px
   const [trendVersion, setTrendVersion] = useState(0) // bumps when lines change
   const [hasTrendlines, setHasTrendlines] = useState(false)
@@ -706,21 +713,23 @@ export default function ChartPanel({
   useEffect(() => {
     const chart = chartRef.current
     if (!chart) return
-    trendSeriesRef.current.forEach((item) => {
-      try {
-        chart.removeSeries(item.series)
-      } catch {
-        /* already gone */
-      }
-    })
-    trendSeriesRef.current = []
     const lines = coin ? loadTrendStore()[coin] || [] : []
     const step = candleStep()
-    for (const ln of lines) {
-      const s = chart.addSeries(LineSeries, TREND_OPTS)
-      s.setData(rayPoints(ln, step))
-      trendSeriesRef.current.push({ series: s, ln })
-    }
+    keepView(chart, () => {
+      trendSeriesRef.current.forEach((item) => {
+        try {
+          chart.removeSeries(item.series)
+        } catch {
+          /* already gone */
+        }
+      })
+      trendSeriesRef.current = []
+      for (const ln of lines) {
+        const s = chart.addSeries(LineSeries, TREND_OPTS)
+        s.setData(rayPoints(ln, step))
+        trendSeriesRef.current.push({ series: s, ln })
+      }
+    })
     setHasTrendlines(lines.length > 0)
   }, [coin, trendVersion, candleTick])
 
@@ -853,7 +862,7 @@ export default function ChartPanel({
         // Single point for now — duplicate times in setData make the lib throw.
         // The crosshair-move preview supplies the second point.
         const s = chart.addSeries(LineSeries, TREND_OPTS)
-        s.setData([pt])
+        keepView(chart, () => s.setData([pt]))
         draftRef.current = { t1: pt.time, p1: pt.value, series: s, raf: null, pending: null }
         return
       }
@@ -869,7 +878,7 @@ export default function ChartPanel({
       const lv = markPx ? lineValueAt(ln, Date.now() / 1000) : null
       if (lv != null && lv > 0) ln.alertSide = markPx > lv ? 1 : markPx < lv ? -1 : 0
       // Keep the drawn series mounted — rendered as a +10y ray from here on.
-      d.series.setData(rayPoints(ln, candleStep()))
+      keepView(chart, () => d.series.setData(rayPoints(ln, candleStep())))
       trendSeriesRef.current.push({ series: d.series, ln })
       draftRef.current = null
       const store = loadTrendStore()
@@ -896,7 +905,8 @@ export default function ChartPanel({
         if (cur.lastT === p.time && cur.lastV === p.value) return
         cur.lastT = p.time
         cur.lastV = p.value
-        cur.series.setData([{ time: cur.t1, value: cur.p1 }, p].sort((x, y) => x.time - y.time))
+        const pts = [{ time: cur.t1, value: cur.p1 }, p].sort((x, y) => x.time - y.time)
+        keepView(chart, () => cur.series.setData(pts))
       })
     }
 
