@@ -212,7 +212,7 @@ export default function VaultPanel({
       <div className="table-tools">
         <button className="sort-by">Sort by size ▾</button>
         <span className="faint" style={{ fontSize: 12 }}>
-          live · updates every 5s
+          positions update every 60s · trades live
         </span>
       </div>
 

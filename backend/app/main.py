@@ -346,6 +346,9 @@ async def peers(addresses: str):
     return {"peers": await asyncio.gather(*(one(a) for a in addrs))}
 
 
+FILLS_HISTORY_TTL = 3600.0  # REST userFills refresh while the wallet's ws stream is live
+
+
 @app.get("/api/fills")
 async def fills(addresses: str, hours: float = 24, limit: int = 60):
     """Recent fills for several addresses, merged newest-first.
@@ -363,17 +366,34 @@ async def fills(addresses: str, hours: float = 24, limit: int = 60):
     limit = max(1, min(limit, 1000))
     cutoff = int(time.time() * 1000) - int(hours * 3_600_000)
 
-    # userFills is one of the heaviest /info calls (weight 20). The cache TTL
-    # scales with how many addresses are polled, so the total spend stays
+    # New fills arrive over the websocket (userFills subscription per wallet),
+    # so this endpoint is cheap to poll. REST userFills (weight 20) is only the
+    # fallback while a wallet's stream isn't live yet, plus older history that
+    # never changes — hence the long TTL once the stream is up. The fallback
+    # TTL scales with how many addresses are polled, so the total spend stays
     # bounded (~300 weight/min) no matter how many traders you follow;
     # `hours`/`limit` only filter locally, so they can share one entry.
     fills_ttl = max(15.0, 4.0 * len(addrs))
+    await asyncio.gather(*(ws_feed.ensure_user_fills(a) for a in addrs))
 
     async def one(addr: str) -> list[dict]:
+        pushed = ws_feed.user_fills(addr)
+        ttl = FILLS_HISTORY_TTL if pushed is not None else fills_ttl
         try:
-            raw = await _cached(f"fills:{addr.lower()}", fills_ttl, lambda: info.user_fills(addr))
+            raw = await _cached(f"fills:{addr.lower()}", ttl, lambda: info.user_fills(addr))
         except Exception:  # noqa: BLE001 — a dead address shouldn't fail the batch
-            return []
+            raw = []
+        if pushed:
+            # Stream first (freshest), then REST history; drop overlap by trade id.
+            seen: set = set()
+            merged_raw = []
+            for f in pushed + list(raw or []):
+                tid = f.get("tid")
+                if tid is not None and tid in seen:
+                    continue
+                seen.add(tid)
+                merged_raw.append(f)
+            raw = merged_raw
         return [
             {**f, "address": addr}
             for f in parse_fills(raw)

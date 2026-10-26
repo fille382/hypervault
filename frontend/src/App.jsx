@@ -51,7 +51,9 @@ function persistVaults(list) {
   }
 }
 
-const FILLS_POLL_MS = 60000
+// Cheap to poll fast: the backend holds a websocket userFills stream per
+// followed wallet and answers from memory (REST is only its fallback).
+const FILLS_POLL_MS = 5000
 const FILLS_HOURS = 72
 const FILLS_LIMIT = 150
 // "Load more" grows the window/limit up to these ceilings (matches backend caps).
