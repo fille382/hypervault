@@ -90,7 +90,6 @@ export default function App() {
   const [selectedCoin, setSelectedCoin] = useState(null)
   const [savedVaults, setSavedVaults] = useState(loadSavedVaults)
   const [online, setOnline] = useState(true) // is the backend reachable?
-  // Chart timeframe drives how often we poll live data (see POLL_BY_TIMEFRAME).
   const [chartTf, setChartTf] = useState('3d')
 
   // Queued toasts: up to TOAST_VISIBLE show stacked, each for its full
