@@ -160,7 +160,16 @@ async def _builder_dexs() -> list[str]:
     return _dex_cache["names"]
 
 
-async def _all_positions(address: str) -> tuple[list[dict], dict]:
+# Followed wallets (vault panel / peers) aren't traded from here, so their
+# upstream data can be much staler than your own account's.
+FOLLOWED_CHS_TTL = 30.0  # clearinghouseState, main dex
+FOLLOWED_DEX_TTL = 300.0  # builder-dex positions (one request per dex)
+FOLLOWED_SPOT_TTL = 120.0
+
+
+async def _all_positions(
+    address: str, chs_ttl: float = 3, dex_ttl: float = 30
+) -> tuple[list[dict], dict]:
     """Positions + margin summary aggregated across the main and builder dexes."""
     dexs = await _builder_dexs()
 
@@ -169,12 +178,12 @@ async def _all_positions(address: str) -> tuple[list[dict], dict]:
 
     results = await asyncio.gather(
         # Cached briefly so a refused/failed upstream call serves the last
-        # snapshot instead of erroring the whole panel. The TTL sits below the
-        # 4s account poll and 5s vault poll, so normal polls stay fresh.
-        _cached(f"chs:{address.lower()}", 3, lambda: info.clearinghouse_state(address)),
-        # Builder-dex positions refresh every 30s — they're niche markets and
-        # 9x-ing the upstream request rate for them isn't worth it.
-        *(_cached(f"dex:{d}:{address.lower()}", 30, dex_fetch(d)) for d in dexs),
+        # snapshot instead of erroring the whole panel. The default TTL sits
+        # below the 4s account poll, so your own positions stay fresh.
+        _cached(f"chs:{address.lower()}", chs_ttl, lambda: info.clearinghouse_state(address)),
+        # Builder-dex positions refresh much slower — they're niche markets and
+        # multiplying the upstream request rate for them isn't worth it.
+        *(_cached(f"dex:{d}:{address.lower()}", dex_ttl, dex_fetch(d)) for d in dexs),
         return_exceptions=True,
     )
     main = results[0]
@@ -278,8 +287,12 @@ async def vault(address: str):
         raise HTTPException(status_code=400, detail="Expected a 0x… 42-character address.")
     try:
         (positions, summary), spot_state, mids = await asyncio.gather(
-            _all_positions(address),
-            _cached(f"spot:{address.lower()}", 30, lambda: info.spot_clearinghouse_state(address)),
+            _all_positions(address, chs_ttl=FOLLOWED_CHS_TTL, dex_ttl=FOLLOWED_DEX_TTL),
+            _cached(
+                f"spot:{address.lower()}",
+                FOLLOWED_SPOT_TTL,
+                lambda: info.spot_clearinghouse_state(address),
+            ),
             _mids(),
         )
     except Exception as exc:  # noqa: BLE001
@@ -310,8 +323,9 @@ async def vault(address: str):
 async def peers(addresses: str):
     """Open positions for several addresses at once (the saved-vaults dropdown).
 
-    Lightweight on purpose: only clearinghouseState per address — no spot, no
-    vault details — so polling a handful of peers stays cheap.
+    Lightweight on purpose: only main-dex clearinghouseState per address — no
+    builder dexes, spot or vault details — and shared with the vault panel's
+    cache, so polling a handful of peers stays cheap.
     """
     addrs: list[str] = []
     for a in addresses.split(","):
@@ -322,7 +336,9 @@ async def peers(addresses: str):
 
     async def one(addr: str) -> dict:
         try:
-            state = await info.clearinghouse_state(addr)
+            state = await _cached(
+                f"chs:{addr.lower()}", FOLLOWED_CHS_TTL, lambda: info.clearinghouse_state(addr)
+            )
             return {"address": addr, "positions": parse_positions(state)}
         except Exception:  # noqa: BLE001 — a dead peer shouldn't fail the batch
             return {"address": addr, "positions": [], "error": True}
