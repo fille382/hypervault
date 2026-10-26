@@ -4,6 +4,8 @@ One connection, a handful of subscriptions — Hyperliquid pushes updates, so we
 never poll it for live data. `allMids` is always on; `l2Book` subscriptions are
 per-coin, created the first time a caller asks for that coin's book and dropped
 again after a while with no readers (someone closed the tab / switched coin).
+`userFills` subscriptions work the same way per followed wallet, so new trades
+arrive as pushes instead of repeated (weight-20) REST userFills polls.
 
 Everything runs on the app's event loop: a single background task owns the
 connection, reconnects with backoff, and re-subscribes after a drop. Readers
@@ -25,6 +27,9 @@ PING_INTERVAL = 30.0  # Hyperliquid closes connections that go quiet (~60s)
 BOOK_IDLE_TTL = 90.0  # drop a coin's l2Book sub this long after the last request
 TRADES_IDLE_TTL = 90.0  # same idea for a coin's public-trades stream
 TRADES_BUFFER = 1500  # trades kept per coin (enough for size statistics)
+USER_IDLE_TTL = 180.0  # drop a wallet's userFills sub this long after the last request
+USER_SUBS_MAX = 10  # Hyperliquid allows 10 unique users across user subscriptions
+USER_FILLS_BUFFER = 2000  # fills kept per wallet (snapshot + pushes)
 RECONNECT_MAX = 30.0  # backoff ceiling between reconnect attempts
 
 
@@ -85,6 +90,10 @@ def parse_trades(data: list) -> list[dict]:
     return out
 
 
+def _user_fills_sub(method: str, user: str) -> dict:
+    return {"method": method, "subscription": {"type": "userFills", "user": user}}
+
+
 class HLWebSocketFeed:
     def __init__(self, base_url: str) -> None:
         self._url = (
@@ -101,6 +110,11 @@ class HLWebSocketFeed:
         self._book_wanted: dict[str, dict] = {}
         self._trades: dict[str, deque] = {}  # coin -> recent public trades
         self._trades_wanted: dict[str, float] = {}  # coin -> last request time
+        self._user_fills: dict[str, deque] = {}  # wallet (lower) -> raw userFills rows
+        self._user_wanted: dict[str, float] = {}  # wallet (lower) -> last request time
+        # Wallets whose snapshot arrived on the CURRENT connection — only those
+        # buffers are complete; anything else must fall back to REST.
+        self._user_live: set[str] = set()
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -181,6 +195,37 @@ class HLWebSocketFeed:
                 {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}}
             )
 
+    def user_fills(self, address: str) -> Optional[list[dict]]:
+        """Raw userFills rows for `address` (snapshot + pushes since), or None
+        while the subscription isn't live (not yet snapshotted / disconnected)."""
+        key = address.lower()
+        if key not in self._user_live or self._ws is None:
+            return None
+        return list(self._user_fills.get(key) or [])
+
+    async def ensure_user_fills(self, address: str) -> None:
+        """Mark `address`'s userFills stream as wanted (subscribes on first ask).
+
+        Hyperliquid caps user subscriptions at USER_SUBS_MAX unique wallets, so
+        the least recently requested one is dropped to make room.
+        """
+        key = address.lower()
+        known = key in self._user_wanted
+        self._user_wanted[key] = time.time()
+        if known:
+            return
+        while len(self._user_wanted) > USER_SUBS_MAX:
+            oldest = min(self._user_wanted, key=self._user_wanted.get)
+            await self._drop_user(oldest)
+        if self._ws is not None:
+            await self._send(_user_fills_sub("subscribe", key))
+
+    async def _drop_user(self, key: str) -> None:
+        self._user_wanted.pop(key, None)
+        self._user_fills.pop(key, None)
+        self._user_live.discard(key)
+        await self._send(_user_fills_sub("unsubscribe", key))
+
     # ── internals ─────────────────────────────────────────────────────────
     async def _send(self, payload: dict) -> None:
         ws = self._ws
@@ -218,6 +263,8 @@ class HLWebSocketFeed:
                         await self._send(
                             {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}}
                         )
+                    for key in list(self._user_wanted):
+                        await self._send(_user_fills_sub("subscribe", key))
                     keeper = asyncio.create_task(self._keepalive())
                     try:
                         async for raw in ws:
@@ -232,6 +279,7 @@ class HLWebSocketFeed:
                 logger.warning("hyperliquid ws disconnected: %s — retrying in %.0fs", exc, backoff)
             finally:
                 self._ws = None
+                self._user_live.clear()  # pushes were missed; wait for a fresh snapshot
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, RECONNECT_MAX)
 
@@ -253,6 +301,9 @@ class HLWebSocketFeed:
                     await self._send(
                         {"method": "unsubscribe", "subscription": {"type": "trades", "coin": coin}}
                     )
+            for key, ts in list(self._user_wanted.items()):
+                if now - ts > USER_IDLE_TTL:
+                    await self._drop_user(key)
 
     def _handle(self, raw: str | bytes) -> None:
         try:
@@ -287,3 +338,17 @@ class HLWebSocketFeed:
                 if buf is None:
                     buf = self._trades[coin] = deque(maxlen=TRADES_BUFFER)
                 buf.append(t)
+        elif channel == "userFills":
+            data = data if isinstance(data, dict) else {}
+            key = str(data.get("user") or "").lower()
+            if key not in self._user_wanted:
+                return  # late push for a wallet we already dropped
+            rows = [f for f in data.get("fills") or [] if isinstance(f, dict)]
+            if data.get("isSnapshot"):
+                self._user_fills[key] = deque(rows, maxlen=USER_FILLS_BUFFER)
+                self._user_live.add(key)
+            else:
+                buf = self._user_fills.get(key)
+                if buf is None:
+                    buf = self._user_fills[key] = deque(maxlen=USER_FILLS_BUFFER)
+                buf.extend(rows)

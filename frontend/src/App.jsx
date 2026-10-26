@@ -18,20 +18,10 @@ import { fmtNum, fmtPrice, shortAddr, coinLabel } from './format.js'
 import { checkAlerts, noticeText } from './alerts.js'
 
 const DEFAULT_VAULT = '0xd6e56265890b76413d1d527eb9b75e334c0c5b42'
-// Live-data poll cadence scales with the chart timeframe: fast when you're
-// scalping a 5m chart, relaxed when you're eyeing a weekly. No point hammering
-// Hyperliquid's free API for sub-5s updates you can't even see on a 3D candle.
-const POLL_BY_TIMEFRAME = {
-  '5m': 5000,
-  '15m': 8000,
-  '1h': 15000,
-  '4h': 30000,
-  '1d': 30000,
-  '3d': 60000,
-  '1w': 60000,
-  '1M': 60000,
-}
-const pollMsFor = (tf) => POLL_BY_TIMEFRAME[tf] || 10000
+// Followed wallets (vault panel, peers, fills) are NOT live-streamed: every poll
+// costs Hyperliquid info-API quota per wallet, so they refresh slowly. Your own
+// account stays fast (ACCOUNT_POLL_MS below).
+const FOLLOWED_POLL_MS = 60000
 // Your own positions update at this fixed rate regardless of the chart timeframe.
 const ACCOUNT_POLL_MS = 4000
 const SAVED_KEY = 'hypervault.savedVaults'
@@ -61,7 +51,9 @@ function persistVaults(list) {
   }
 }
 
-const FILLS_POLL_MS = 20000
+// Cheap to poll fast: the backend holds a websocket userFills stream per
+// followed wallet and answers from memory (REST is only its fallback).
+const FILLS_POLL_MS = 5000
 const FILLS_HOURS = 72
 const FILLS_LIMIT = 150
 // "Load more" grows the window/limit up to these ceilings (matches backend caps).
@@ -98,9 +90,7 @@ export default function App() {
   const [selectedCoin, setSelectedCoin] = useState(null)
   const [savedVaults, setSavedVaults] = useState(loadSavedVaults)
   const [online, setOnline] = useState(true) // is the backend reachable?
-  // Chart timeframe drives how often we poll live data (see POLL_BY_TIMEFRAME).
   const [chartTf, setChartTf] = useState('3d')
-  const pollMs = pollMsFor(chartTf)
 
   // Queued toasts: up to TOAST_VISIBLE show stacked, each for its full
   // TOAST_MS; anything beyond that waits in a small pending queue instead of
@@ -239,9 +229,9 @@ export default function App() {
   useEffect(() => {
     if (!visible) return undefined
     refresh()
-    const id = setInterval(refresh, pollMs)
+    const id = setInterval(refresh, FOLLOWED_POLL_MS)
     return () => clearInterval(id)
-  }, [refresh, visible, pollMs])
+  }, [refresh, visible])
 
   // YOUR OWN account (positions + live PnL) — polled fast and independent of the
   // chart timeframe, so your PnL stays current even while viewing a wide candle.
@@ -335,12 +325,12 @@ export default function App() {
         })
         .catch(() => {})
     load()
-    const id = setInterval(load, Math.max(pollMs, 10000)) // peers never faster than 10s
+    const id = setInterval(load, FOLLOWED_POLL_MS)
     return () => {
       cancelled = true
       clearInterval(id)
     }
-  }, [savedVaults, activeAddress, visible, pollMs])
+  }, [savedVaults, activeAddress, visible])
 
   // Poll recent fills for ALL saved vaults (including the active one).
   useEffect(() => {
