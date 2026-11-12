@@ -31,7 +31,7 @@ from .hl_info import (
     value_spot_balances,
 )
 from .hl_trade import HLTrader, TradingNotConfigured, UpstreamRateLimited
-from .hl_ws import HLWebSocketFeed, parse_book
+from .hl_ws import USER_SUBS_MAX, HLWebSocketFeed, parse_book
 from .leaderboard import METRICS as LB_METRICS, WINDOWS as LB_WINDOWS, LeaderboardCache
 from .models import (
     ArmRequest,
@@ -319,6 +319,21 @@ async def vault(address: str):
     }
 
 
+FOLLOW_MAX = 50  # wallets one feed/peers request may cover (dedupe + sanity bound)
+
+
+def _parse_addresses(addresses: str) -> list[str]:
+    """Comma-separated query value -> valid, de-duplicated addresses (in order)."""
+    addrs: list[str] = []
+    seen: set[str] = set()
+    for a in addresses.split(","):
+        a = a.strip()
+        if _valid_address(a) and a.lower() not in seen:
+            seen.add(a.lower())
+            addrs.append(a)
+    return addrs[:FOLLOW_MAX]
+
+
 @app.get("/api/peers")
 async def peers(addresses: str):
     """Open positions for several addresses at once (the saved-vaults dropdown).
@@ -327,12 +342,7 @@ async def peers(addresses: str):
     builder dexes, spot or vault details — and shared with the vault panel's
     cache, so polling a handful of peers stays cheap.
     """
-    addrs: list[str] = []
-    for a in addresses.split(","):
-        a = a.strip()
-        if _valid_address(a) and a.lower() not in {x.lower() for x in addrs}:
-            addrs.append(a)
-    addrs = addrs[:10]
+    addrs = _parse_addresses(addresses)
 
     async def one(addr: str) -> dict:
         try:
@@ -356,25 +366,23 @@ async def fills(addresses: str, hours: float = 24, limit: int = 60):
     Powers the activity feed: real trade history from the exchange, so the
     feed is complete even for trades made while the app was closed.
     """
-    addrs: list[str] = []
-    for a in addresses.split(","):
-        a = a.strip()
-        if _valid_address(a) and a.lower() not in {x.lower() for x in addrs}:
-            addrs.append(a)
-    addrs = addrs[:10]
+    addrs = _parse_addresses(addresses)
     hours = max(0.5, min(hours, 720.0))  # up to 30 days for "load more" history
     limit = max(1, min(limit, 1000))
     cutoff = int(time.time() * 1000) - int(hours * 3_600_000)
 
     # New fills arrive over the websocket (userFills subscription per wallet),
-    # so this endpoint is cheap to poll. REST userFills (weight 20) is only the
-    # fallback while a wallet's stream isn't live yet, plus older history that
-    # never changes — hence the long TTL once the stream is up. The fallback
-    # TTL scales with how many addresses are polled, so the total spend stays
-    # bounded (~300 weight/min) no matter how many traders you follow;
+    # so this endpoint is cheap to poll. Hyperliquid allows only USER_SUBS_MAX
+    # streamed wallets, so only the first ones get a stream — asking for more
+    # would make them evict each other on every poll. REST userFills (weight
+    # 20) covers the rest, plus wallets whose stream isn't live yet, plus older
+    # history that never changes (hence the long TTL once a stream is up). The
+    # fallback TTL scales with how many wallets need REST, so the total spend
+    # stays bounded (~300 weight/min) no matter how many traders you follow;
     # `hours`/`limit` only filter locally, so they can share one entry.
-    fills_ttl = max(15.0, 4.0 * len(addrs))
-    await asyncio.gather(*(ws_feed.ensure_user_fills(a) for a in addrs))
+    await asyncio.gather(*(ws_feed.ensure_user_fills(a) for a in addrs[:USER_SUBS_MAX]))
+    rest_polled = sum(1 for a in addrs if ws_feed.user_fills(a) is None)
+    fills_ttl = max(15.0, 4.0 * rest_polled)
 
     async def one(addr: str) -> list[dict]:
         pushed = ws_feed.user_fills(addr)
